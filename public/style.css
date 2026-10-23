@@ -167,3 +167,29 @@ a.row:active { background: var(--chip); }
   font-size: 11px; line-height: 1.35; color: var(--muted); text-align: center;
   padding: 8px max(16px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
 }
+
+/* ---------- Tournaments menu (slides in from the left) */
+.drawer { position: fixed; inset: 0; z-index: 30; }
+.drawer[hidden] { display: none; }
+.drawer-backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / .35); }
+.drawer-panel {
+  position: absolute; top: 0; bottom: 0; left: 0; width: min(88vw, 360px);
+  background: var(--bg); overflow-y: auto; overscroll-behavior: contain;
+  padding: calc(8px + env(safe-area-inset-top, 0px)) 12px calc(76px + env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
+  box-shadow: 4px 0 24px rgb(0 0 0 / .2);
+  animation: slide-in .18s ease-out;
+}
+@keyframes slide-in { from { transform: translateX(-100%); } }
+@media (prefers-reduced-motion: reduce) { .drawer-panel { animation: none; } }
+.drawer-head { display: flex; align-items: center; justify-content: space-between; margin: 0 4px 10px 6px; font-size: 18px; }
+.menu-name { font-weight: 600; font-size: 14px; line-height: 1.3; }
+.drawer .caption { white-space: normal; }
+.load-more { display: block; margin: 4px auto 0; }
+body.no-scroll { overflow: hidden; }
+
+/* ---------- Team links and team page */
+.team-link { color: var(--text); }
+.team-link span { border-bottom: 1px dashed var(--muted); }
+.team-head { display: flex; align-items: center; gap: 14px; margin: 4px 4px 14px; }
+.team-head strong { font-size: 20px; }
+.time .d { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
