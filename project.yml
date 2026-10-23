@@ -1,0 +1,19 @@
+# Optional: generate the Xcode project with XcodeGen (`brew install xcodegen && xcodegen`)
+name: HockeyLive
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  HockeyLive:
+    type: application
+    platform: iOS
+    sources: [HockeyLive]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.HockeyLive
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Hockey Live
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
