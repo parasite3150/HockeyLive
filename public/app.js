@@ -23,6 +23,8 @@ const ICONS = {
   right: '<path d="M9 18l6-6-6-6"/>',
   home: '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/>',
   calendar: '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  close: '<path d="M6 6l12 12M18 6 6 18"/>',
 };
 function icon(name, size = 22) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -89,6 +91,9 @@ const S = {
   lastUpdated: null,
   matchDetails: new Map(),  // match id → { detail, stats, detailError, statsError }
   tournamentData: new Map(),// tournament id → { standings, stats, standingsError, statsError }
+  menuOpen: false,
+  team: null,               // { code, category, cutoff, ids, busy } for the team page being viewed
+  teamCategory: new Map(),  // team code → the category it was last opened with (for the toggle)
 };
 
 let renderQueued = false;
@@ -168,16 +173,22 @@ function move(step) {
   const next = S.days[i + step];
   if (next) selectDay(next);
 }
+const oldestStart = () => [...S.tournaments.values()].map((t) => t.startKey).sort()[0] ?? "9999";
+
+/** Load older pages of the tournament list until it reaches back to `key`. */
+async function loadCatalogBackTo(key) {
+  while (S.hasMore && oldestStart() > key) {
+    if (S.loadingCatalog) await new Promise((r) => setTimeout(r, 200));
+    else { await loadNextCatalogPage(); if (S.catalogError) break; }
+  }
+}
+
 async function jumpTo(key) {
   if (!key) return;
   S.pinned.add(key);
   S.jumping = true;
   changed();
-  const oldest = () => [...S.tournaments.values()].map((t) => t.startKey).sort()[0] ?? "9999";
-  while (S.hasMore && oldest() > key) {
-    if (S.loadingCatalog) await new Promise((r) => setTimeout(r, 200));
-    else { await loadNextCatalogPage(); if (S.catalogError) break; }
-  }
+  await loadCatalogBackTo(key);
   S.jumping = false;
   rebuildDays();
   selectDay(key);
@@ -236,14 +247,53 @@ async function loadTournament(id) {
   ]);
 }
 
+/** Run `work` over `items`, at most `limit` at a time. */
+async function inBatches(items, limit, work) {
+  const queue = [...items];
+  await Promise.all(Array.from({ length: Math.min(limit, queue.length) }, async () => {
+    while (queue.length) await work(queue.shift());
+  }));
+}
+
+/**
+ * Team page: every tournament from 6 months ago onwards (in the same category,
+ * unless "All categories" is chosen), then that team's matches from each.
+ */
+async function loadTeam(code, category) {
+  const cutoff = P.addDays(P.today(), -183);
+  const team = { code, category, cutoff, ids: [], busy: true };
+  if (category) S.teamCategory.set(code, category);
+  S.team = team;
+  changed();
+  await loadCatalogBackTo(cutoff);
+  if (S.team !== team) return;   // the viewer moved on
+  team.ids = [...S.tournaments.values()]
+    .filter((t) => t.endKey >= cutoff && (!category || t.category === category))
+    .sort((a, b) => b.startKey.localeCompare(a.startKey))
+    .map((t) => t.id);
+  changed();
+  await inBatches(team.ids, 4, (id) => (S.team === team ? loadMatches(id) : null));
+  team.busy = false;
+  changed();
+}
+
+function teamMatches(team) {
+  const cutoffDate = P.keyToDate(team.cutoff);
+  return team.ids.flatMap((id) => S.matchCache.get(id) ?? [])
+    .filter((m) => (m.home === team.code || m.away === team.code) && m.start >= cutoffDate);
+}
+
+const teamHref = (code, category) => `#/team/${encodeURIComponent(code)}${category ? `/${encodeURIComponent(category)}` : ""}`;
+
 // =================================================================== Routing
 // #/            day list
 // #/m/123/goals match screen (tab optional)
 // #/t/1926/standings tournament screen (tab optional)
+// #/team/JPN/Under%2021%20Mens%20Outdoor   team page (category optional)
 
 function route() {
   const [name, id, tab] = location.hash.replace(/^#\/?/, "").split("/");
-  return { name: name || "home", id: Number(id), tab };
+  return { name: name || "home", id: Number(id), raw: decodeURIComponent(id ?? ""), tab: tab && decodeURIComponent(tab) };
 }
 function setTab(tab) {
   const r = route();
@@ -258,6 +308,7 @@ function goBack() {
 function goHome() { location.hash = "#/"; }
 
 window.addEventListener("hashchange", () => {
+  S.menuOpen = false;
   inAppSteps = route().name === "home" ? 0 : inAppSteps + 1;
   window.scrollTo(0, 0);
   onRoute();
@@ -268,6 +319,7 @@ function onRoute() {
   render();
   if (r.name === "m" && r.id) loadMatchDetail(r.id);
   if (r.name === "t" && r.id) loadTournament(r.id);
+  if (r.name === "team" && r.raw) loadTeam(r.raw, r.tab || null);
 }
 
 // =================================================================== Rendering
@@ -279,13 +331,22 @@ function render() {
   const r = route();
   if (r.name === "m" && r.id) renderMatch(r.id, r.tab);
   else if (r.name === "t" && r.id) renderTournament(r.id, r.tab);
+  else if (r.name === "team" && r.raw) renderTeam(r.raw, r.tab || null);
   else renderHome();
+  renderMenu();
 }
+
+const menuButton = () => h("button", {
+  class: "icon-btn", onclick: openMenu, "aria-label": "Tournaments menu", "aria-expanded": String(S.menuOpen),
+}, icon("menu"));
+const spacer = () => h("span", { class: "icon-btn", "aria-hidden": "true" });
 
 function subBar(title, sub) {
   return h("div", { class: "bar" },
     h("button", { class: "icon-btn", onclick: goBack, "aria-label": "Back" }, icon("left")),
+    menuButton(),
     h("div", { class: "bar-title" }, h("h1", {}, title), sub ? h("div", { class: "sub" }, sub) : null),
+    spacer(),
     h("button", { class: "icon-btn", onclick: goHome, "aria-label": "Home" }, icon("home")));
 }
 
@@ -309,7 +370,7 @@ function message(title, detail, action) {
 
 // ---------- Match row (used on the day list and the tournament screen)
 
-function matchRow(m, { showCompetition = false } = {}) {
+function matchRow(m, { showCompetition = false, showDate = false } = {}) {
   const state = P.matchState(m.status);
   const showScore = state !== "upcoming";
   const team = (code, score) => h("div", { class: "team" },
@@ -319,6 +380,7 @@ function matchRow(m, { showCompetition = false } = {}) {
     .filter(Boolean).join(" · ");
   return h("a", { class: `row ${state}`, href: `#/m/${m.id}` },
     h("div", { class: "time" },
+      showDate ? h("span", { class: "d" }, m.start.toLocaleDateString(undefined, { day: "numeric", month: "short" })) : null,
       h("span", { class: "t num" }, timeText(m.start)),
       state === "live" ? h("span", { class: "badge-live" }, "LIVE") : null,
       state === "finished" ? h("span", { class: "badge-ft" }, "FT") : null,
@@ -340,9 +402,11 @@ function renderHome() {
   });
   topbar.replaceChildren(
     h("div", { class: "bar" },
+      menuButton(),
       h("button", { class: "icon-btn", onclick: () => move(-1), disabled: i <= 0, "aria-label": "Previous day" }, icon("left")),
       h("div", { class: "bar-title" }, h("h1", {}, dayTitle(key)), h("div", { class: "sub" }, rel ?? " ")),
-      h("button", { class: "icon-btn", onclick: () => move(1), disabled: i < 0 || i >= S.days.length - 1, "aria-label": "Next day" }, icon("right"))),
+      h("button", { class: "icon-btn", onclick: () => move(1), disabled: i < 0 || i >= S.days.length - 1, "aria-label": "Next day" }, icon("right")),
+      spacer()),
     h("div", { class: "tools" },
       h("button", { class: "pill", onclick: () => selectDay(P.today()), disabled: key === P.today() }, "Today"),
       h("label", { class: "pill" }, icon("calendar", 15), "Choose date", dateInput)));
@@ -418,15 +482,16 @@ function renderMatch(id, tab = "lineups") {
   const score = d?.scoreline || (base && base.homeScore != null ? `${base.homeScore} - ${base.awayScore}` : "–");
 
   const compLine = [competition, stage].filter(Boolean).join(" · ");
+  const category = base ? S.tournaments.get(base.competitionID)?.category ?? null : null;
   const head = h("div", { class: "match-head" },
     base?.competitionID ? h("a", { class: "comp", href: `#/t/${base.competitionID}` }, compLine, " ›") : h("div", { class: "comp" }, compLine),
     h("div", { class: "sides" },
-      h("div", { class: "side" }, flag(homeCode, true), homeName),
+      teamSide(homeCode, homeName, category),
       h("div", {},
         h("div", { class: `big num${state === "live" ? " live" : ""}` }, state === "upcoming" && base ? timeText(base.start) : score),
         h("div", { class: `status${state === "live" ? " live" : ""}` }, state === "live" ? `LIVE · ${status}` : status),
         base?.scoreNote ? h("div", { class: "meta" }, base.scoreNote) : null),
-      h("div", { class: "side" }, flag(awayCode, true), awayName)),
+      teamSide(awayCode, awayName, category)),
     base ? h("div", { class: "meta" },
       [base.start.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }), base.venue].filter(Boolean).join(" · ")) : null);
 
@@ -437,6 +502,12 @@ function renderMatch(id, tab = "lineups") {
   else body = section(null, spinnerRow());
 
   view.replaceChildren(...[head, segmented(MATCH_TABS, tab), body].flat(Infinity).filter(Boolean));
+}
+
+/** Flag and team name; the name links to the team page. */
+function teamSide(code, name, category) {
+  if (!code) return h("div", { class: "side" }, flag(null, true), name);
+  return h("a", { class: "side team-link", href: teamHref(code, category) }, flag(code, true), h("span", {}, name, " ›"));
 }
 
 function lineupsTab(d) {
@@ -593,6 +664,102 @@ document.addEventListener("visibilitychange", () => {
   else if (r.name === "m") loadMatchDetail(r.id);
   else if (r.name === "t") loadTournament(r.id);
 });
+
+// ---------- Team page
+
+function renderTeam(code, category) {
+  const name = P.countryName(code);
+  topbar.replaceChildren(subBar(name, category ?? "All categories"));
+
+  const team = S.team;
+  const parts = [h("div", { class: "team-head" }, flag(code, true),
+    h("div", {}, h("strong", {}, name), h("div", { class: "caption" }, "Matches from the last 6 months and upcoming fixtures")))];
+
+  // Same category ↔ every team from this country.
+  const lastCategory = category ?? S.teamCategory.get(code) ?? null;
+  if (lastCategory) {
+    parts.push(h("div", { class: "seg", role: "tablist" },
+      h("button", { role: "tab", "aria-selected": String(!!category), onclick: () => location.replace(teamHref(code, lastCategory)) }, lastCategory),
+      h("button", { role: "tab", "aria-selected": String(!category), onclick: () => location.replace(teamHref(code, null)) }, "All categories")));
+  }
+
+  if (!team || team.code !== code || team.category !== category) {
+    parts.push(section(null, spinnerRow()));
+    view.replaceChildren(...parts);
+    return;
+  }
+
+  const matches = teamMatches(team);
+  const results = matches.filter((m) => P.matchState(m.status) !== "upcoming").sort((a, b) => b.start - a.start);
+  const fixtures = matches.filter((m) => P.matchState(m.status) === "upcoming").sort((a, b) => a.start - b.start);
+  const checked = team.ids.filter((id) => S.matchCache.has(id) || S.failed.has(id)).length;
+
+  if (team.busy) {
+    parts.push(section(null, spinnerRow(team.ids.length
+      ? `Checking tournaments… ${checked} of ${team.ids.length}`
+      : "Finding tournaments from the last 6 months…")));
+  }
+  if (fixtures.length) parts.push(section("Upcoming", fixtures.map((m) => matchRow(m, { showCompetition: true, showDate: true }))));
+  if (results.length) parts.push(section("Results", results.map((m) => matchRow(m, { showCompetition: true, showDate: true }))));
+  if (!team.busy && !matches.length) {
+    parts.push(section(null, message("No matches found",
+      category ? `No ${category} matches for ${name} in the last 6 months. Try "All categories".` : `No matches for ${name} in the last 6 months.`)));
+  }
+  if (!team.busy && team.ids.some((id) => S.failed.has(id))) {
+    parts.push(section(null, message(null, "Some tournaments couldn't be checked. Open this page again to retry.")));
+  }
+  view.replaceChildren(...parts);
+}
+
+// ---------- Tournaments menu
+
+const drawer = h("div", { id: "menu", class: "drawer", hidden: true });
+document.body.append(drawer);
+
+function openMenu() {
+  S.menuOpen = true;
+  render();
+  drawer.querySelector("button, a")?.focus();
+}
+function closeMenu() {
+  S.menuOpen = false;
+  render();
+}
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && S.menuOpen) closeMenu(); });
+
+function renderMenu() {
+  drawer.hidden = !S.menuOpen;
+  document.body.classList.toggle("no-scroll", S.menuOpen);
+  if (!S.menuOpen) { drawer.replaceChildren(); return; }
+
+  const t = P.today();
+  const all = [...S.tournaments.values()];
+  const groups = [
+    ["In progress", all.filter((x) => x.startKey <= t && t <= x.endKey).sort((a, b) => a.startKey.localeCompare(b.startKey))],
+    ["Upcoming", all.filter((x) => x.startKey > t).sort((a, b) => a.startKey.localeCompare(b.startKey))],
+    ["Recent", all.filter((x) => x.endKey < t).sort((a, b) => b.endKey.localeCompare(a.endKey))],
+  ];
+  const range = (x) => {
+    const f = (k) => P.keyToDate(k).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    return x.startKey === x.endKey ? f(x.startKey) : `${f(x.startKey)} – ${f(x.endKey)} ${x.endKey.slice(0, 4)}`;
+  };
+  const item = (x) => h("a", { class: "row", href: `#/t/${x.id}` },
+    h("div", { class: "grow" },
+      h("div", { class: "menu-name" }, x.name),
+      h("div", { class: "caption" }, [range(x), x.category, x.location].filter(Boolean).join(" · "))),
+    h("span", { class: "chev" }, icon("right", 16)));
+
+  drawer.replaceChildren(
+    h("div", { class: "drawer-backdrop", onclick: closeMenu }),
+    h("nav", { class: "drawer-panel", "aria-label": "Tournaments" },
+      h("div", { class: "drawer-head" },
+        h("strong", {}, "Tournaments"),
+        h("button", { class: "icon-btn", onclick: closeMenu, "aria-label": "Close menu" }, icon("close"))),
+      groups.filter(([, list]) => list.length).map(([title, list]) => section(title, list.map(item))),
+      !all.length ? section(null, S.loadingCatalog ? spinnerRow() : message(null, S.catalogError ?? "No tournaments loaded yet.")) : null,
+      S.hasMore ? h("button", { class: "pill load-more", onclick: loadNextCatalogPage, disabled: S.loadingCatalog },
+        S.loadingCatalog ? "Loading…" : "Load older tournaments") : null));
+}
 
 // =================================================================== Start
 
