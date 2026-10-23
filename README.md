@@ -29,3 +29,16 @@ Alternatively, run `xcodegen` with the included `project.yml`.
 | Tournament stats | `fih.altiusrt.com/competitions/{id}/statistics` |
 | Match page | `fih.altiusrt.com/matches/{id}` |
 | Match stats (JSON) | `tms.fih.ch/rt/matches/{id}?embeds=statistics` |
+
+## Web version
+The same app as a website (`public/`) for any phone or computer. On iPhone, open it in Safari and choose **Share → Add to Home Screen**.
+
+- `public/`: the web app (plain HTML, CSS and JavaScript, no build step).
+- `api/fih.js`: a small helper that fetches FIH pages for the app, because browsers can't read another site's pages directly. Only the page types the app needs are allowed, and responses are cached for 20 seconds.
+
+### Deploy on Vercel (free)
+1. Sign in at vercel.com with GitHub, then **Add New → Project** and import this repository.
+2. Keep the defaults (Framework: Other) and click **Deploy**.
+3. Every push to `main` redeploys automatically.
+
+Every screen shows a credit saying the data comes from the FIH / Altius competition website (fih.altiusrt.com), and that this is an unofficial fan app.
