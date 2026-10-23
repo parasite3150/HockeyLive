@@ -1,0 +1,6 @@
+{
+  "name": "hockeylive-web",
+  "private": true,
+  "type": "module",
+  "description": "Web version of Hockey Live, hosted on Vercel"
+}
