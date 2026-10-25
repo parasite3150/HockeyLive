@@ -461,10 +461,10 @@ document.addEventListener("keydown", (e) => {
 
 // ---------- Match screen
 
-const MATCH_TABS = [["lineups", "Lineups"], ["goals", "Goals"], ["cards", "Cards"], ["stats", "Stats"], ["h2h", "H2H"]];
+const MATCH_TABS = [["goals", "Goals"], ["cards", "Cards"], ["stats", "Stats"], ["lineups", "Lineups"], ["h2h", "H2H"]];
 
-function renderMatch(id, tab = "lineups") {
-  if (!MATCH_TABS.some(([k]) => k === tab)) tab = "lineups";
+function renderMatch(id, tab = "goals") {
+  if (!MATCH_TABS.some(([k]) => k === tab)) tab = "goals";
   const base = S.matchIndex.get(id);
   const entry = S.matchDetails.get(id) ?? {};
   const d = entry.detail;
