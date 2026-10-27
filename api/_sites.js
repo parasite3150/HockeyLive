@@ -11,6 +11,7 @@ export const SITES = {
     base: "https://fih.altiusrt.com",
     stats: (id) => `https://tms.fih.ch/rt/matches/${id}?embeds=statistics`,
   },
+  ehf: altius("eurohockey.altiusrt.com"),       // European Hockey Federation (International)
   hi: altius("hockeyindia.altiusrt.com"),       // Hockey India
   ha: altius("hockeyaustralia.altiusrt.com"),   // Hockey Australia
   nz: altius("hockeynz.altiusrt.com"),          // Hockey New Zealand

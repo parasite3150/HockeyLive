@@ -113,3 +113,15 @@ test("live clock counts on while running and stops at the end of the quarter", (
   assert.equal(P.liveMinute(clock, 0, 3_600_000), 30);
   assert.equal(P.liveMinute({ ...clock, running: false }, 0, 60_000), 23);
 });
+
+test("Euro Hockey club tournament: long team codes and names", () => {
+  const names = P.parseTeamCodes(page("ehf-summary-411.html"));
+  assert.match(names.get("EDINBURGHUNIMEN"), /^Edinburgh University Men's HC/);
+  assert.match(names.get("ARMINEN"), /^SV Arminen/);
+  assert.ok(names.has("ORÉE"));
+  assert.equal(names.size, 12);
+
+  const matches = P.parseMatchListing(page("ehf-matches-411.html"), 411);
+  assert.equal(matches.length, 12);
+  assert.ok(matches.every((m) => names.has(m.home) && names.has(m.away)));
+});

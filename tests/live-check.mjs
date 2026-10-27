@@ -18,11 +18,17 @@ const doc = (html) => new DOMParser().parseFromString(html, "text/html");
 for (const [key, site] of Object.entries(SITES)) {
   const fail = (msg) => (REQUIRED.has(key) ? problems : warnings).push(`[${key}] ${msg}`);
   try {
-    const { tournaments } = P.parseCatalog(doc(await get(`${site.base}/competitions?view=all&page=1`)));
+    const today = P.today();
+    // Some sites list years ahead, so read pages until one has a tournament that has started.
+    const tournaments = [];
+    for (let page = 1; page <= 4; page++) {
+      const list = P.parseCatalog(doc(await get(`${site.base}/competitions?view=all&page=${page}`)));
+      tournaments.push(...list.tournaments);
+      if (!list.hasMore || list.tournaments.some((t) => t.startKey <= today)) break;
+    }
     if (!tournaments.length) { fail("tournament list: no tournaments read"); continue; }
 
     // The most recent tournament that has started, so it has finished matches.
-    const today = P.today();
     const started = tournaments.filter((t) => t.startKey <= today).sort((a, b) => b.startKey.localeCompare(a.startKey));
     let checkedMatch = false;
     for (const t of started.slice(0, 4)) {

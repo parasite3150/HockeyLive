@@ -40,7 +40,7 @@ The web version reads several Altius competition sites, which all share the page
 
 | View | Sites |
 |---|---|
-| International | FIH (fih.altiusrt.com) |
+| International | FIH (fih.altiusrt.com), Euro Hockey (eurohockey.altiusrt.com: European championships and the Euro Hockey League) |
 | Domestic (choose a country) | India (hockeyindia), Australia (hockeyaustralia), New Zealand (hockeynz), Canada (fhc), South Africa (saha), Denmark (dhu) — all `.altiusrt.com` |
 
 The switch at the top offers **All** (every site, international tournaments first), **International** and **Domestic** (with a row of country chips). Tournaments can be starred (☆ on the tournament screen) to keep their matches at the top of the day list. Match and tournament IDs in app links carry their site (site position × 100,000,000 + the site's own ID; FIH IDs are unchanged).

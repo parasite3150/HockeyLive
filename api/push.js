@@ -47,7 +47,7 @@ async function vapidKeys() {
 
 const subscriptionId = (endpoint) => crypto.createHash("sha256").update(endpoint).digest("hex").slice(0, 24);
 const cleanCodes = (list) =>
-  (Array.isArray(list) ? list : []).filter((c) => typeof c === "string" && /^[A-Za-z0-9]{2,6}$/.test(c)).slice(0, 30);
+  (Array.isArray(list) ? list : []).filter((c) => typeof c === "string" && /^[\p{L}0-9]{2,20}$/u.test(c)).slice(0, 30);
 
 async function subscribe(body) {
   const sub = body?.subscription;

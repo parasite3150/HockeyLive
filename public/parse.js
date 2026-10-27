@@ -388,7 +388,7 @@ export function parseTeamCodes(doc) {
   const names = new Map();
   for (const tr of portlet(doc, "Teams")?.querySelectorAll("tr") ?? []) {
     const td = cells(tr);
-    if (td.length >= 2 && text(td[0]) && /^[A-Z0-9]{2,6}$/.test(text(td[1]))) names.set(text(td[1]), text(td[0]));
+    if (td.length >= 2 && text(td[0]) && /^[\p{Lu}0-9]{2,20}$/u.test(text(td[1]))) names.set(text(td[1]), text(td[0]));
   }
   return names;
 }

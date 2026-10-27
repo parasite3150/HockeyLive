@@ -41,10 +41,14 @@ function icon(name, size = 22) {
 
 function flag(code, large = false, site = "fih") {
   // Club and state teams have no flags: show their code in a small badge instead.
-  if (!SITES[site]?.flags) return h("span", { class: `flag mono${large ? " lg" : ""}`, "aria-hidden": "true" }, (code ?? "").slice(0, 3));
+  const badge = () => h("span", { class: `flag mono${large ? " lg" : ""}`, "aria-hidden": "true" }, (code ?? "").slice(0, 3));
+  const mode = SITES[site]?.flags;
+  if (!mode) return badge();
   const url = P.flagURL(code);
   if (!url) return h("span", { class: `flag${large ? " lg" : ""}` });
-  return h("img", { class: `flag${large ? " lg" : ""}`, src: url, alt: "", loading: "lazy", onerror: (e) => { e.target.style.visibility = "hidden"; } });
+  // "try": national teams have flags, clubs don't (Euro Hockey), so fall back to the badge.
+  return h("img", { class: `flag${large ? " lg" : ""}`, src: url, alt: "", loading: "lazy",
+    onerror: (e) => { if (mode === "try") e.target.replaceWith(badge()); else e.target.style.visibility = "hidden"; } });
 }
 
 const timeText = (d) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -72,6 +76,7 @@ const spinnerRow = (label = "Loading…") => h("div", { class: "message" }, h("s
 const SITE_KEYS = ["fih", "hi", "ehf", "ha", "nz", "fhc", "saha", "dhu"];
 const SITES = {
   fih: { group: "intl", short: "FIH", label: "International", owner: "FIH", host: "fih.altiusrt.com", flags: true },
+  ehf: { group: "intl", short: "Euro Hockey", label: "Euro Hockey", owner: "European Hockey Federation", host: "eurohockey.altiusrt.com", flags: "try" },
   hi: { group: "dom", short: "India", label: "India", owner: "Hockey India", host: "hockeyindia.altiusrt.com" },
   ha: { group: "dom", short: "Australia", label: "Australia", owner: "Hockey Australia", host: "hockeyaustralia.altiusrt.com" },
   nz: { group: "dom", short: "New Zealand", label: "New Zealand", owner: "Hockey New Zealand", host: "hockeynz.altiusrt.com" },
@@ -373,8 +378,10 @@ async function loadNextCatalogPage() {
 
 /** First page of each active site's list (once), favourite tournaments still running, then the selected day. */
 async function startSites() {
+  const fresh = activeSites().filter((k) => catalog(k).nextPage === 1 && !catalog(k).loading);
   await Promise.all([
-    ...activeSites().filter((k) => catalog(k).nextPage === 1 && !catalog(k).loading).map((k) => loadCatalogPage(k, 1)),
+    // Page 1 can be all future tournaments (Euro Hockey lists years ahead): read on until today is covered.
+    ...fresh.map((k) => loadCatalogPage(k, 1).then(() => loadCatalogBackTo(P.today(), [k]))),
     // Long leagues can be further down their site's list than page 1, so fetch these directly.
     ...[...S.favTournaments.values()]
       .filter((f) => isActive(f.site) && (!f.endKey || f.endKey >= P.addDays(P.today(), -7)))
@@ -390,17 +397,17 @@ function teamName(code, site = "fih") {
 }
 /** Team code for a full name (standings and statistics only show names). */
 function teamCodeFor(name, site = "fih") {
-  if (SITES[site]?.flags) return P.countryCode(name);
+  if (SITES[site]?.flags === true) return P.countryCode(name);
   const wanted = String(name).toLowerCase(), prefix = `${site}:`;
   for (const [k, full] of S.teamNames) if (k.startsWith(prefix) && full.toLowerCase() === wanted) return k.slice(prefix.length);
   return null;
 }
-const displayTeam = (name, site = "fih") => (SITES[site]?.flags ? name : P.niceTeamName(name));
+const displayTeam = (name, site = "fih") => (SITES[site]?.flags === true ? name : P.niceTeamName(name));
 
 /** Sites without country codes: read a tournament's team codes and names (once). */
 async function loadTeamNames(id) {
   const site = siteOf(id);
-  if (SITES[site]?.flags || S.namesLoaded.has(id)) return;
+  if (SITES[site]?.flags === true || S.namesLoaded.has(id)) return;
   S.namesLoaded.add(id);
   try {
     for (const [code, name] of P.parseTeamCodes(await fetchDoc(site, `/competitions/${rawId(id)}`))) S.teamNames.set(teamKey(site, code), name);
@@ -829,11 +836,11 @@ function renderHome() {
   if (favourites.length) parts.push(section("★ Favourites", favourites.map((m) => matchRow(m, { showCompetition: true }))));
 
   // Favourite tournaments first, then tournaments with a favourite team playing,
-  // then international before domestic; otherwise the usual order.
+  // then international before domestic (FIH, Euro Hockey, then each country); otherwise the usual order.
   const intl = (sec) => SITES[siteOf(sec.id)]?.group === "intl";
   const tournamentSections = sectionsFor(key)
-    .map((sec, i) => ({ sec, i, favT: S.favTournaments.has(sec.id), fav: sec.matches.some(isFavouriteMatch), intl: intl(sec) }))
-    .sort((a, b) => (b.favT - a.favT) || (b.fav - a.fav) || (b.intl - a.intl) || (a.i - b.i))
+    .map((sec, i) => ({ sec, i, favT: S.favTournaments.has(sec.id), fav: sec.matches.some(isFavouriteMatch), intl: intl(sec), site: Math.floor(sec.id / ID_SPAN) }))
+    .sort((a, b) => (b.favT - a.favT) || (b.fav - a.fav) || (b.intl - a.intl) || (a.site - b.site) || (a.i - b.i))
     .map((x) => x.sec);
   for (const sec of tournamentSections) {
     const tag = VIEW === "dom" ? null : siteTag(siteOf(sec.id));
