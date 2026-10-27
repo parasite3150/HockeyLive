@@ -461,10 +461,11 @@ function renderHome() {
   const parts = [];
   if (S.jumping) parts.push(section(null, spinnerRow("Loading older tournaments…")));
 
-  for (const sec of sectionsFor(key)) {
-    parts.push(section(
-      h("a", { href: `#/t/${sec.id}` }, sec.name, " ›"),
-      sec.matches.map((m) => matchRow(m))));
+  // Three blocks: live, then upcoming, then completed; each in start-time order.
+  const dayMatches = sectionsFor(key).flatMap((sec) => sec.matches).sort((a, b) => a.start - b.start);
+  for (const [title, state] of [["Live", "live"], ["Upcoming", "upcoming"], ["Completed", "finished"]]) {
+    const list = dayMatches.filter((m) => P.matchState(m.status) === state);
+    if (list.length) parts.push(section(title, list.map((m) => matchRow(m, { showCompetition: true }))));
   }
 
   const loading = isLoadingDay(key) || (S.loadingCatalog && !S.tournaments.size);
