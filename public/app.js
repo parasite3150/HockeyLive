@@ -559,19 +559,19 @@ function renderMatch(id, tab = "goals") {
   view.replaceChildren(...[head, segmented(MATCH_TABS, tab), body].flat(Infinity).filter(Boolean));
 }
 
-/** "YAMADA Seia" → "S. Yamada"; a lone surname ("ADEEL") → "Adeel"; other names stay as they are. */
-function shortName(name, fullFirstName = false) {
+/** "YAMADA Seia" → "Seia Yamada", "van der BERG Jan" → "Jan van der Berg"; a lone surname ("ADEEL") → "Adeel". */
+function displayName(name) {
   const words = name.split(" ").filter(Boolean);
   const isSurname = (w) => w.length > 1 && w === w.toUpperCase() && /[A-Z]/.test(w);
   const surname = words.filter(isSurname);
   if (!surname.length) return name;
   const first = words.findIndex(isSurname), lastIdx = words.length - 1 - [...words].reverse().findIndex(isSurname);
-  // Given name comes after the surname on the FIH site; lowercase words before it are particles ("van der").
-  const given = words.slice(lastIdx + 1).find((w) => !isSurname(w)) ?? words.slice(0, first).find((w) => w !== w.toLowerCase());
+  // Given names come after the surname on the FIH site; lowercase words before it are particles ("van der").
+  const given = words.slice(lastIdx + 1).filter((w) => !isSurname(w));
   const particles = words.slice(0, first).filter((w) => w === w.toLowerCase());
+  const givenBefore = words.slice(0, first).filter((w) => w !== w.toLowerCase());
   const last = [...particles, ...surname.map((w) => w.charAt(0) + w.slice(1).toLowerCase())].join(" ");
-  if (!given) return last;
-  return fullFirstName ? `${given} ${last}` : `${given.charAt(0).toUpperCase()}. ${last}`;
+  return [...(given.length ? given : givenBefore), last].join(" ");
 }
 
 /** Goal scorers under each team: one line per player with all their minutes. */
@@ -586,10 +586,7 @@ function scorersBlock(goals, homeName, awayName) {
       if (!byPlayer.has(key)) byPlayer.set(key, { player: g.player, minutes: [] });
       byPlayer.get(key).minutes.push(`${g.minute}'${marker(g.action)}`);
     }
-    const players = [...byPlayer.values()];
-    // Two different players who'd both read "H. Singh" get their full first name instead.
-    const clash = (p) => players.some((o) => o !== p && shortName(o.player) === shortName(p.player));
-    return players.map((p) => h("div", {}, `${shortName(p.player, clash(p))} ${p.minutes.join(", ")}`));
+    return [...byPlayer.values()].map((p) => h("div", {}, `${displayName(p.player)} ${p.minutes.join(", ")}`));
   };
   const ball = h("span", { class: "ball", "aria-label": "Goals" });
   return h("div", { class: "scorers" },
