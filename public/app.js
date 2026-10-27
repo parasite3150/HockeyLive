@@ -94,9 +94,29 @@ const S = {
   menuOpen: false,
   clocks: new Map(),        // match id → { clock, fetchedAt } for live matches
   clockLoading: new Set(),
+  favourites: loadFavourites(),   // team codes, e.g. "IND", kept in this browser
   team: null,               // { code, category, cutoff, ids, busy } for the team page being viewed
   teamCategory: new Map(),  // team code → the category it was last opened with (for the toggle)
 };
+
+// ---------- Favourite teams (stored in this browser only)
+
+// A function declaration (not a const) because S is created above and calls this at start-up.
+function favouritesKey() { return "hockeylive.favourites"; }
+function loadFavourites() {
+  try {
+    const list = JSON.parse(localStorage.getItem(favouritesKey()) || "[]");
+    return new Set(Array.isArray(list) ? list.filter((c) => typeof c === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+function toggleFavourite(code) {
+  if (S.favourites.has(code)) S.favourites.delete(code); else S.favourites.add(code);
+  try { localStorage.setItem(favouritesKey(), JSON.stringify([...S.favourites])); } catch { /* private mode: keep for this visit */ }
+  render();
+}
+const isFavouriteMatch = (m) => S.favourites.has(m.home) || S.favourites.has(m.away);
 
 let renderQueued = false;
 function changed() {
@@ -421,7 +441,8 @@ function matchRow(m, { showCompetition = false, showDate = false } = {}) {
   const state = P.matchState(m.status);
   const showScore = state !== "upcoming";
   const team = (code, score) => h("div", { class: "team" },
-    flag(code), h("span", { class: "name" }, P.countryName(code)),
+    flag(code), h("span", { class: "name" }, P.countryName(code),
+      S.favourites.has(code) ? h("span", { class: "fav-star", "aria-label": "Favourite" }, " ★") : null),
     showScore && score != null ? h("span", { class: "score num" }, score) : null);
   const caption = [showCompetition ? m.competition : null, m.number ? `Match ${m.number}` : null, m.stage, m.venue]
     .filter(Boolean).join(" · ");
@@ -467,7 +488,18 @@ function renderHome() {
     .sort((a, b) => a.start - b.start);
   if (live.length) parts.push(section("Live", live.map((m) => matchRow(m, { showCompetition: true }))));
 
-  for (const sec of sectionsFor(key)) {
+  // Then the day's matches for favourite teams (also repeated under their tournament).
+  const favourites = sectionsFor(key).flatMap((sec) => sec.matches)
+    .filter(isFavouriteMatch)
+    .sort((a, b) => a.start - b.start);
+  if (favourites.length) parts.push(section("★ Favourites", favourites.map((m) => matchRow(m, { showCompetition: true }))));
+
+  // Tournaments with a favourite team playing come first; otherwise the usual order.
+  const tournamentSections = sectionsFor(key)
+    .map((sec, i) => ({ sec, i, fav: sec.matches.some(isFavouriteMatch) }))
+    .sort((a, b) => (b.fav - a.fav) || (a.i - b.i))
+    .map((x) => x.sec);
+  for (const sec of tournamentSections) {
     parts.push(section(
       h("a", { href: `#/t/${sec.id}` }, sec.name, " ›"),
       sec.matches.map((m) => matchRow(m))));
@@ -768,8 +800,12 @@ function renderTeam(code, category) {
   topbar.replaceChildren(subBar(name, category ?? "All categories"));
 
   const team = S.team;
+  const isFav = S.favourites.has(code);
   const parts = [h("div", { class: "team-head" }, flag(code, true),
-    h("div", {}, h("strong", {}, name), h("div", { class: "caption" }, "Matches from the last 6 months and upcoming fixtures")))];
+    h("div", { class: "grow" }, h("strong", {}, name), h("div", { class: "caption" }, "Matches from the last 6 months and upcoming fixtures")),
+    h("button", {
+      class: `pill fav-btn${isFav ? " on" : ""}`, onclick: () => toggleFavourite(code), "aria-pressed": String(isFav),
+    }, isFav ? "★ Favourite" : "☆ Add to favourites"))];
 
   // Same category ↔ every team from this country.
   const lastCategory = category ?? S.teamCategory.get(code) ?? null;
@@ -851,6 +887,11 @@ function renderMenu() {
       h("div", { class: "drawer-head" },
         h("strong", {}, "Tournaments"),
         h("button", { class: "icon-btn", onclick: closeMenu, "aria-label": "Close menu" }, icon("close"))),
+      section("★ Favourite teams", S.favourites.size
+        ? [...S.favourites].sort((a, b) => P.countryName(a).localeCompare(P.countryName(b))).map((code) =>
+            h("a", { class: "row", href: teamHref(code, null) }, flag(code), h("span", { class: "grow" }, P.countryName(code)),
+              h("span", { class: "chev" }, icon("right", 16))))
+        : message(null, "Open a team page and tap ☆ Add to favourites.")),
       groups.filter(([, list]) => list.length).map(([title, list]) => section(title, list.map(item))),
       !all.length ? section(null, S.loadingCatalog ? spinnerRow() : message(null, S.catalogError ?? "No tournaments loaded yet.")) : null,
       S.hasMore ? h("button", { class: "pill load-more", onclick: loadNextCatalogPage, disabled: S.loadingCatalog },
