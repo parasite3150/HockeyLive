@@ -241,3 +241,21 @@ body.no-scroll { overflow: hidden; }
     --on-live: #04172f;
   }
 }
+
+/* Switch: each option shows its own colour (green International, blue India Domestic),
+   using fixed values so both colours are visible whichever mode is active. */
+.source-switch .src-fih { --src: #0e6b44; --src-soft: #e2f1ea; }
+.source-switch .src-hi  { --src: #1d5fbf; --src-soft: #e2ebf9; }
+@media (prefers-color-scheme: dark) {
+  .source-switch .src-fih { --src: #47c48b; --src-soft: #163327; }
+  .source-switch .src-hi  { --src: #6ea8ff; --src-soft: #15253d; }
+}
+.source-switch button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+.source-switch .src-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--src); opacity: .45; flex-shrink: 0;
+}
+.source-switch button[aria-selected="true"] {
+  background: var(--src-soft); color: var(--src);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--src) 35%, transparent);
+}
+.source-switch button[aria-selected="true"] .src-dot { opacity: 1; }

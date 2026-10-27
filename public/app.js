@@ -546,8 +546,8 @@ function renderHome() {
   topbar.replaceChildren(
     h("div", { class: "source-switch seg", role: "tablist", "aria-label": "Competitions" },
       Object.entries(SOURCES).map(([key, src]) => h("button", {
-        role: "tab", "aria-selected": String(key === SOURCE), onclick: () => switchSource(key),
-      }, src.label))),
+        class: `src-${key}`, role: "tab", "aria-selected": String(key === SOURCE), onclick: () => switchSource(key),
+      }, h("span", { class: "src-dot", "aria-hidden": "true" }), src.label))),
     h("div", { class: "bar" },
       menuButton(),
       h("button", { class: "icon-btn", onclick: () => move(-1), disabled: i <= 0, "aria-label": "Previous day" }, icon("left")),
