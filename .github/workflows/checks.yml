@@ -1,0 +1,23 @@
+name: Checks
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 6 * * *"   # daily, 06:17 UTC: check the live sites
+  workflow_dispatch:
+
+jobs:
+  page-readers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - name: Read the saved pages
+        run: npm test
+      - name: Read the live FIH and Hockey India sites
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: npm run check-live

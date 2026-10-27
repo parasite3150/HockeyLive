@@ -2,5 +2,13 @@
   "name": "hockeylive-web",
   "private": true,
   "type": "module",
-  "description": "Web version of Hockey Live, hosted on Vercel"
+  "description": "Web version of Hockey Live, hosted on Vercel",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "check-live": "node tests/live-check.mjs"
+  },
+  "dependencies": {
+    "linkedom": "0.18.14",
+    "web-push": "3.6.7"
+  }
 }

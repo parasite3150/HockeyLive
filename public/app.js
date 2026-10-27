@@ -25,6 +25,8 @@ const ICONS = {
   calendar: '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  share: '<path d="M12 3v12M7.5 7.5 12 3l4.5 4.5"/><path d="M6 11H5v10h14V11h-1"/>',
+  bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
 };
 function icon(name, size = 22) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -160,9 +162,107 @@ function loadFavourites() {
 function toggleFavourite(code) {
   if (S.favourites.has(code)) S.favourites.delete(code); else S.favourites.add(code);
   try { localStorage.setItem(favouritesKey(), JSON.stringify([...S.favourites])); } catch { /* private mode: keep for this visit */ }
+  syncAlerts();   // keep goal alerts in step with the favourites
   render();
 }
 const isFavouriteMatch = (m) => S.favourites.has(m.home) || S.favourites.has(m.away);
+
+// ---------- Goal alerts (web push) for favourite teams
+
+const alertsSupported = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const isInstalled = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+let alertsBusy = false;
+
+function alertsOn() { try { return localStorage.getItem("hockeylive.alerts") === "on"; } catch { return false; } }
+function setAlertsOn(on) { try { localStorage.setItem("hockeylive.alerts", on ? "on" : "off"); } catch { /* not saved */ } }
+
+/** Favourites for both modes (alerts cover International and India Domestic). */
+function allFavourites() {
+  const read = (key) => { try { return JSON.parse(localStorage.getItem(key) || "[]"); } catch { return []; } };
+  return { fih: read("hockeylive.favourites"), hi: read("hockeylive.favourites.hi") };
+}
+
+function keyBytes(base64) {
+  const padded = (base64 + "=".repeat((4 - (base64.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
+}
+
+async function postAlerts(action, body) {
+  const res = await fetch(`/api/push?action=${action}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+  return data;
+}
+
+async function turnOnAlerts() {
+  alertsBusy = true; render();
+  try {
+    if ((await Notification.requestPermission()) !== "granted") {
+      toast("Notifications are blocked. Allow them in your phone's settings.");
+      return;
+    }
+    const keyRes = await fetch("/api/push?action=key");
+    const key = await keyRes.json().catch(() => ({}));
+    if (!keyRes.ok) throw new Error(key.error || "Goal alerts aren't available right now.");
+    const reg = await navigator.serviceWorker.ready;
+    const subscription = (await reg.pushManager.getSubscription())
+      ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key.publicKey) }));
+    await postAlerts("subscribe", { subscription, favourites: allFavourites() });
+    setAlertsOn(true);
+    toast("Goal alerts on");
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    alertsBusy = false; render();
+  }
+}
+
+async function turnOffAlerts() {
+  alertsBusy = true; render();
+  try {
+    const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+    if (sub) {
+      await postAlerts("unsubscribe", { endpoint: sub.endpoint }).catch(() => {});
+      await sub.unsubscribe();
+    }
+    setAlertsOn(false);
+    toast("Goal alerts off");
+  } finally {
+    alertsBusy = false; render();
+  }
+}
+
+/** Send the current favourites to the alerts service (after a favourite is added or removed). */
+async function syncAlerts() {
+  if (!alertsSupported || !alertsOn()) return;
+  try {
+    const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+    if (sub) await postAlerts("subscribe", { subscription: sub, favourites: allFavourites() });
+  } catch { /* tried again on the next change */ }
+}
+
+/** The Goal alerts row in the menu. */
+function alertsRow() {
+  if (!alertsSupported) {
+    const text = isIOS && !isInstalled
+      ? "To get goal alerts on iPhone, add Hockey Live to your Home Screen (Share → Add to Home Screen), open it from there, then turn alerts on here. Needs iOS 16.4 or later."
+      : "This browser can't show goal alerts.";
+    return h("div", { class: "row alerts-row" }, h("span", { class: "alert-icon" }, icon("bell", 18)), h("div", { class: "grow caption" }, text));
+  }
+  const on = alertsOn() && Notification.permission === "granted";
+  return h("div", { class: "row alerts-row" },
+    h("span", { class: "alert-icon" }, icon("bell", 18)),
+    h("div", { class: "grow" },
+      h("div", { class: "menu-name" }, "Goal alerts"),
+      h("div", { class: "caption" }, on ? "Kick-off, goals and full time for your favourite teams" : "Get notified when your favourite teams play")),
+    h("button", {
+      class: `pill fav-btn${on ? " on" : ""}`, disabled: alertsBusy, "aria-pressed": String(on),
+      onclick: on ? turnOffAlerts : turnOnAlerts,
+    }, alertsBusy ? "…" : on ? "On" : "Turn on"));
+}
 
 let renderQueued = false;
 function changed() {
@@ -197,6 +297,7 @@ async function loadCatalogPage(page) {
     S.catalogError = e.message;
   } finally {
     S.loadingCatalog = false;
+    saveSnapshotSoon();
     changed();
   }
 }
@@ -246,6 +347,7 @@ async function loadMatches(id, force = false) {
     S.failed.add(id);
   } finally {
     S.loading.delete(id);
+    saveSnapshotSoon();
     changed();
   }
 }
@@ -410,6 +512,47 @@ function teamMatches(team) {
 
 const teamHref = (code, category) => link(`team/${encodeURIComponent(code)}${category ? `/${encodeURIComponent(category)}` : ""}`);
 
+// =================================================================== Quick start: last data kept on this device
+
+const SNAPSHOT_KEY = `hockeylive.snapshot.${SOURCE}`;
+const SNAPSHOT_MAX_AGE = 12 * 3600 * 1000;
+let snapshotTimer = null;
+
+/** Keep tournaments around today (±3 days) and their matches, so the next visit opens instantly. */
+function saveSnapshotSoon() {
+  clearTimeout(snapshotTimer);
+  snapshotTimer = setTimeout(() => {
+    const from = P.addDays(P.today(), -3), to = P.addDays(P.today(), 3);
+    const tournaments = [...S.tournaments.values()].filter((t) => t.endKey >= from && t.startKey <= to);
+    const matches = {};
+    for (const t of tournaments) if (S.matchCache.has(t.id)) matches[t.id] = S.matchCache.get(t.id);
+    try {
+      localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({
+        savedAt: Date.now(), tournaments, matches, teamNames: [...S.teamNames],
+      }));
+    } catch { /* storage full or blocked: just skip */ }
+  }, 1500);
+}
+
+/** Show the last saved data straight away (it is refreshed right after). */
+function restoreSnapshot() {
+  try {
+    const snap = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || "null");
+    if (!snap || Date.now() - snap.savedAt > SNAPSHOT_MAX_AGE) return false;
+    for (const t of snap.tournaments ?? []) S.tournaments.set(t.id, t);
+    for (const [id, list] of Object.entries(snap.matches ?? {})) {
+      const matches = list.map((m) => ({ ...m, start: new Date(m.start) }));
+      S.matchCache.set(Number(id), matches);
+      matches.forEach((m) => S.matchIndex.set(m.id, m));
+    }
+    for (const [code, name] of snap.teamNames ?? []) S.teamNames.set(code, name);
+    S.lastUpdated = new Date(snap.savedAt);
+    return S.tournaments.size > 0;
+  } catch {
+    return false;
+  }
+}
+
 // =================================================================== Routing
 // #/            day list
 // #/m/123/goals match screen (tab optional)
@@ -467,13 +610,13 @@ const menuButton = () => h("button", {
 }, icon("menu"));
 const spacer = () => h("span", { class: "icon-btn", "aria-hidden": "true" });
 
-function subBar(title, sub) {
+function subBar(title, sub, extraButton = null) {
   if (SOURCE === "hi") sub = sub ? `${sub} · India Domestic` : "India Domestic";
   return h("div", { class: "bar" },
     h("button", { class: "icon-btn", onclick: goBack, "aria-label": "Back" }, icon("left")),
     menuButton(),
     h("div", { class: "bar-title" }, h("h1", {}, title), sub ? h("div", { class: "sub" }, sub) : null),
-    spacer(),
+    extraButton ?? spacer(),
     h("button", { class: "icon-btn", onclick: goHome, "aria-label": "Home" }, icon("home")));
 }
 
@@ -633,7 +776,8 @@ function renderMatch(id, tab = "goals") {
   const entry = S.matchDetails.get(id) ?? {};
   const d = entry.detail;
 
-  topbar.replaceChildren(subBar(base?.number ? `Match ${base.number}` : "Match", null));
+  topbar.replaceChildren(subBar(base?.number ? `Match ${base.number}` : "Match", null,
+    h("button", { class: "icon-btn", onclick: () => shareMatch(id), "aria-label": "Share this match" }, icon("share"))));
 
   const status = d?.status || base?.status || "";
   const state = P.matchState(status);
@@ -704,6 +848,37 @@ function scorersBlock(goals, homeName, awayName) {
     h("div", { class: "home num" }, lines(homeName)),
     ball,
     h("div", { class: "away num" }, lines(awayName)));
+}
+
+/** Share a match through the phone's share sheet, or copy its link where there isn't one. */
+async function shareMatch(id) {
+  const base = S.matchIndex.get(id);
+  const d = S.matchDetails.get(id)?.detail;
+  const home = base ? teamName(base.home) : displayTeam(d?.home?.name ?? "");
+  const away = base ? teamName(base.away) : displayTeam(d?.away?.name ?? "");
+  const state = P.matchState(d?.status ?? base?.status);
+  const score = d?.scoreline ?? (base?.homeScore != null ? `${base.homeScore} - ${base.awayScore}` : null);
+  const title = state === "upcoming" || !score ? `${home} v ${away}` : `${home} ${score.replace(" - ", "–")} ${away}`;
+  const when = base ? base.start.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "";
+  const text = [title, base?.competition, state === "live" ? "Live now" : state === "upcoming" ? when : "Full time"]
+    .filter(Boolean).join(" · ");
+  const url = location.href;
+  if (navigator.share) {
+    try { await navigator.share({ title, text, url }); } catch { /* closed the share sheet */ }
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(`${text}\n${url}`);
+    toast("Link copied");
+  } catch {
+    toast(url);
+  }
+}
+
+function toast(text) {
+  const el = h("div", { class: "toast", role: "status" }, text);
+  document.body.append(el);
+  setTimeout(() => el.remove(), 2500);
 }
 
 /** Flag and team name; the name links to the team page. */
@@ -971,6 +1146,7 @@ function renderMenu() {
       h("div", { class: "drawer-head" },
         h("strong", {}, `${SRC.label} tournaments`),
         h("button", { class: "icon-btn", onclick: closeMenu, "aria-label": "Close menu" }, icon("close"))),
+      section(null, alertsRow()),
       section("★ Favourite teams", S.favourites.size
         ? [...S.favourites].sort((a, b) => teamName(a).localeCompare(teamName(b))).map((code) =>
             h("a", { class: "row", href: teamHref(code, null) }, flag(code), h("span", { class: "grow" }, teamName(code)),
@@ -998,6 +1174,14 @@ document.documentElement.dataset.source = SOURCE;
 document.querySelector('meta[name="theme-color"]')?.setAttribute("content", SOURCE === "hi" ? "#1d4f9e" : "#0e5a3a");
 document.title = SOURCE === "hi" ? "Hockey Live · India Domestic" : "Hockey Live";
 
+// Background script for goal alerts.
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
+// Show the last saved data at once, then fetch fresh data (today's tournaments are re-read).
+const restored = restoreSnapshot();
 rebuildDays();
 onRoute();
-loadCatalogPage(1).then(() => ensureDay(S.selected));
+loadCatalogPage(1).then(async () => {
+  if (restored) await Promise.all(covering(P.today()).map((t) => loadMatches(t.id, true)));
+  await ensureDay(S.selected);
+});

@@ -42,3 +42,17 @@ The same app as a website (`public/`) for any phone or computer. On iPhone, open
 3. Every push to `main` redeploys automatically.
 
 Every screen shows a credit saying the data comes from the FIH / Altius competition website (fih.altiusrt.com), and that this is an unofficial fan app.
+
+## Tests
+- `npm test` checks the page readers against saved copies of real FIH and Hockey India pages (`tests/fixtures/`).
+- `npm run check-live` reads the live sites and fails if they can no longer be read.
+- GitHub runs both: the saved-page tests on every push, and the live-site check daily (GitHub emails you if it fails).
+
+## Goal alerts
+Notifications for favourite teams: kick-off, each goal (with the scorer) and full time. They are handled by `api/push.js` and `public/sw.js`.
+
+To set them up:
+1. **Storage:** in Vercel, open the project, go to **Storage → Create / Connect → Upstash (Redis)**, use the free plan and connect it to this project. This adds the `KV_REST_API_URL` and `KV_REST_API_TOKEN` settings. Then redeploy.
+2. **Timer:** at cron-job.org (free), create a job that opens `https://<your-app>.vercel.app/api/push?action=check` every minute.
+
+The push keys are created automatically on first use. On iPhone, alerts need the app added to the Home Screen and iOS 16.4 or later.

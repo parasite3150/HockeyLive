@@ -1,5 +1,10 @@
 {
   "buildCommand": "",
   "outputDirectory": "public",
-  "cleanUrls": true
+  "cleanUrls": true,
+  "functions": {
+    "api/push.js": {
+      "maxDuration": 60
+    }
+  }
 }

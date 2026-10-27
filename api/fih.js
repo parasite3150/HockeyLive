@@ -1,26 +1,30 @@
+import { SITES, USER_AGENT } from "./_sites.js";
+
 // Fetches pages from the Altius competition sites for the web app.
 // Browsers can't read another site's pages directly, so the app asks this
 // function instead. Only the two known sites, and only the handful of page
 // types the app uses, are allowed.
-
-const SITES = {
-  // International (FIH)
-  fih: {
-    base: "https://fih.altiusrt.com",
-    stats: (id) => `https://tms.fih.ch/rt/matches/${id}?embeds=statistics`,
-  },
-  // India domestic (Hockey India); match statistics are served by the site itself.
-  hi: {
-    base: "https://hockeyindia.altiusrt.com",
-    stats: (id) => `https://hockeyindia.altiusrt.com/rt/matches/${id}?embeds=statistics`,
-  },
-};
 
 const ALLOWED_PATHS = [
   /^\/competitions\?view=all&page=\d{1,4}$/,               // tournament list
   /^\/competitions\/\d{1,6}(\/(matches|pools|statistics))?$/, // tournament pages (summary page has team names)
   /^\/matches\/\d{1,8}$/,                                   // match page
 ];
+
+/**
+ * How long Vercel may keep a copy. Anything that can change during a match stays at 20 seconds
+ * so live scores are fresh; pages that can't change any more are kept much longer, which makes
+ * the app faster and spares the source sites.
+ */
+function cacheSeconds(path, stats, body, ok) {
+  if (!ok) return 20;
+  if (stats) return /"status"\s*:\s*"Official"/.test(body) ? 86400 : 20;          // match statistics
+  if (/^\/matches\//.test(path)) return /class="match_status">\s*Official/.test(body) ? 86400 : 20;  // finished match
+  const page = Number(path.match(/[?&]page=(\d+)/)?.[1] ?? 0);
+  if (page > 1) return 3600;                                                 // older tournaments
+  if (page === 1) return 60;                                                 // newest tournaments
+  return 20;                                                                 // tournament matches, standings, statistics
+}
 
 export default async function handler(req, res) {
   const { path, stats } = req.query;
@@ -47,14 +51,13 @@ export default async function handler(req, res) {
   try {
     const upstream = await fetch(url, {
       headers: {
-        "User-Agent": "HockeyLive fan web app",
+        "User-Agent": USER_AGENT,
         Accept: stats ? "application/json" : "text/html",
       },
     });
     const body = await upstream.text();
     res.setHeader("Content-Type", upstream.headers.get("content-type") || "text/plain; charset=utf-8");
-    // Short shared cache: live scores stay fresh, and the source site isn't hit for every visitor.
-    res.setHeader("Cache-Control", "public, s-maxage=20, stale-while-revalidate=60");
+    res.setHeader("Cache-Control", `public, s-maxage=${cacheSeconds(path, stats, body, upstream.ok)}, stale-while-revalidate=60`);
     res.status(upstream.status).send(body);
   } catch {
     res.status(502).send("Couldn't reach the competition site.");
