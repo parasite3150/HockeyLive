@@ -559,11 +559,15 @@ function renderMatch(id, tab = "goals") {
   view.replaceChildren(...[head, segmented(MATCH_TABS, tab), body].flat(Infinity).filter(Boolean));
 }
 
-/** "YAMADA Seia" → "Yamada"; names without a capitalised surname stay as they are. */
+/** "YAMADA Seia" → "S. Yamada"; a lone surname ("ADEEL") → "Adeel"; other names stay as they are. */
 function shortName(name) {
-  const surname = name.split(" ").filter((w) => w.length > 1 && w === w.toUpperCase() && /[A-Z]/.test(w));
-  const words = surname.length ? surname : [name];
-  return words.map((w) => w.charAt(0) + w.slice(1).toLowerCase()).join(" ");
+  const words = name.split(" ").filter(Boolean);
+  const isSurname = (w) => w.length > 1 && w === w.toUpperCase() && /[A-Z]/.test(w);
+  const surname = words.filter(isSurname);
+  if (!surname.length) return name;
+  const given = words.find((w) => !isSurname(w));
+  const last = surname.map((w) => w.charAt(0) + w.slice(1).toLowerCase()).join(" ");
+  return given ? `${given.charAt(0).toUpperCase()}. ${last}` : last;
 }
 
 /** Goal scorers under each team: one line per player with all their minutes. */
