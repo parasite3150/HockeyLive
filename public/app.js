@@ -540,6 +540,7 @@ function renderMatch(id, tab = "goals") {
           state === "live" ? ["LIVE · ", status, clockText(id) && /'$/.test(clockText(id)) ? [" · ", h("span", { "data-clock": id }, clockText(id))] : null] : status),
         base?.scoreNote ? h("div", { class: "meta" }, base.scoreNote) : null),
       teamSide(awayCode, awayName, category)),
+    state !== "upcoming" && d ? scorersBlock(d.goals, d.home?.name ?? homeName, d.away?.name ?? awayName) : null,
     base ? h("div", { class: "meta" },
       [base.start.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }), base.venue].filter(Boolean).join(" · ")) : null);
 
@@ -550,6 +551,33 @@ function renderMatch(id, tab = "goals") {
   else body = section(null, spinnerRow());
 
   view.replaceChildren(...[head, segmented(MATCH_TABS, tab), body].flat(Infinity).filter(Boolean));
+}
+
+/** "YAMADA Seia" → "Yamada"; names without a capitalised surname stay as they are. */
+function shortName(name) {
+  const surname = name.split(" ").filter((w) => w.length > 1 && w === w.toUpperCase() && /[A-Z]/.test(w));
+  const words = surname.length ? surname : [name];
+  return words.map((w) => w.charAt(0) + w.slice(1).toLowerCase()).join(" ");
+}
+
+/** Goal scorers under each team: one line per player with all their minutes. */
+function scorersBlock(goals, homeName, awayName) {
+  if (!goals.length) return null;
+  const marker = (action) => (/corner/i.test(action) ? " (PC)" : /stroke/i.test(action) ? " (PS)" : "");
+  const lines = (teamName) => {
+    const byPlayer = new Map();
+    for (const g of goals.filter((x) => x.team === teamName)) {
+      const name = shortName(g.player);
+      if (!byPlayer.has(name)) byPlayer.set(name, []);
+      byPlayer.get(name).push(`${g.minute}'${marker(g.action)}`);
+    }
+    return [...byPlayer].map(([name, minutes]) => h("div", {}, `${name} ${minutes.join(", ")}`));
+  };
+  const ball = h("span", { class: "ball", "aria-label": "Goals" });
+  return h("div", { class: "scorers" },
+    h("div", { class: "home num" }, lines(homeName)),
+    ball,
+    h("div", { class: "away num" }, lines(awayName)));
 }
 
 /** Flag and team name; the name links to the team page. */
