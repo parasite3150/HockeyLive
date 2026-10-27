@@ -9,16 +9,16 @@ const SITES = {
     base: "https://fih.altiusrt.com",
     stats: (id) => `https://tms.fih.ch/rt/matches/${id}?embeds=statistics`,
   },
-  // India domestic (Hockey India). Its match statistics service isn't known yet.
+  // India domestic (Hockey India); match statistics are served by the site itself.
   hi: {
     base: "https://hockeyindia.altiusrt.com",
-    stats: null,
+    stats: (id) => `https://hockeyindia.altiusrt.com/rt/matches/${id}?embeds=statistics`,
   },
 };
 
 const ALLOWED_PATHS = [
   /^\/competitions\?view=all&page=\d{1,4}$/,               // tournament list
-  /^\/competitions\/\d{1,6}\/(matches|pools|statistics)$/,  // tournament pages
+  /^\/competitions\/\d{1,6}(\/(matches|pools|statistics))?$/, // tournament pages (summary page has team names)
   /^\/matches\/\d{1,8}$/,                                   // match page
 ];
 

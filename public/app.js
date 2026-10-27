@@ -38,6 +38,8 @@ function icon(name, size = 22) {
 }
 
 function flag(code, large = false) {
+  // Domestic teams have no flags: show their code in a small badge instead.
+  if (SOURCE === "hi") return h("span", { class: `flag mono${large ? " lg" : ""}`, "aria-hidden": "true" }, (code ?? "").slice(0, 3));
   const url = P.flagURL(code);
   if (!url) return h("span", { class: `flag${large ? " lg" : ""}` });
   return h("img", { class: `flag${large ? " lg" : ""}`, src: url, alt: "", loading: "lazy", onerror: (e) => { e.target.style.visibility = "hidden"; } });
@@ -68,7 +70,7 @@ const SOURCES = {
   },
   hi: {
     label: "India Domestic", site: "hockeyindia.altiusrt.com", owner: "Hockey India",
-    hasMatchStats: false,   // its statistics service isn't known yet
+    hasMatchStats: true,
   },
 };
 
@@ -138,6 +140,8 @@ const S = {
   clockLoading: new Set(),
   favourites: loadFavourites(),   // team codes, e.g. "IND", kept in this browser
   team: null,               // { code, category, cutoff, ids, busy } for the team page being viewed
+  teamNames: new Map(),     // India Domestic: team code → full name (HAP → Hockey Andhra Pradesh)
+  namesLoaded: new Set(),   // tournaments whose team names have been read
   teamCategory: new Map(),  // team code → the category it was last opened with (for the toggle)
 };
 
@@ -201,7 +205,34 @@ async function loadNextCatalogPage() {
   await loadCatalogPage(S.nextPage);
 }
 
+/** Team name for display: the domestic name table, else the country name. */
+function teamName(code) {
+  const name = S.teamNames.get(code);
+  return name ? P.niceTeamName(name) : P.countryName(code);
+}
+/** Team code for a full name (standings and statistics only show names). */
+function teamCodeFor(name) {
+  if (SOURCE !== "hi") return P.countryCode(name);
+  const wanted = String(name).toLowerCase();
+  for (const [code, full] of S.teamNames) if (full.toLowerCase() === wanted) return code;
+  return null;
+}
+const displayTeam = (name) => (SOURCE === "hi" ? P.niceTeamName(name) : name);
+
+/** India Domestic: read a tournament's team codes and names (once). */
+async function loadTeamNames(id) {
+  if (SOURCE !== "hi" || S.namesLoaded.has(id)) return;
+  S.namesLoaded.add(id);
+  try {
+    for (const [code, name] of P.parseTeamCodes(await fetchDoc(`/competitions/${id}`))) S.teamNames.set(code, name);
+    changed();
+  } catch {
+    S.namesLoaded.delete(id);   // try again next time
+  }
+}
+
 async function loadMatches(id, force = false) {
+  loadTeamNames(id);
   if (S.loading.has(id) || (!force && S.matchCache.has(id))) return;
   S.loading.add(id);
   changed();
@@ -485,7 +516,7 @@ function matchRow(m, { showCompetition = false, showDate = false } = {}) {
   const state = P.matchState(m.status);
   const showScore = state !== "upcoming";
   const team = (code, score) => h("div", { class: "team" },
-    flag(code), h("span", { class: "name" }, P.countryName(code),
+    flag(code), h("span", { class: "name" }, teamName(code),
       S.favourites.has(code) ? h("span", { class: "fav-star", "aria-label": "Favourite" }, " ★") : null),
     showScore && score != null ? h("span", { class: "score num" }, score) : null);
   const caption = [showCompetition ? m.competition : null, m.number ? `Match ${m.number}` : null, m.stage, m.venue]
@@ -608,8 +639,8 @@ function renderMatch(id, tab = "goals") {
   const state = P.matchState(status);
   const homeCode = base?.home ?? d?.home?.code;
   const awayCode = base?.away ?? d?.away?.code;
-  const homeName = base ? P.countryName(base.home) : d?.home?.name ?? "";
-  const awayName = base ? P.countryName(base.away) : d?.away?.name ?? "";
+  const homeName = base ? teamName(base.home) : displayTeam(d?.home?.name ?? "");
+  const awayName = base ? teamName(base.away) : displayTeam(d?.away?.name ?? "");
   const competition = base?.competition ?? d?.competition;
   const stage = base?.stage ?? d?.stage;
   const score = d?.scoreline || (base && base.homeScore != null ? `${base.homeScore} - ${base.awayScore}` : "–");
@@ -690,9 +721,9 @@ function lineupsTab(d) {
       ["G", "Y", "R"].includes(e.kind) ? h("span", { class: `card-chip card-${e.kind}`, title: "Card" }) : h("span", { class: "dot", title: "Goal" }),
       `${e.minute}'`))) : null);
   return d.lineups.flatMap((team) => [
-    section(`${team.team} · Starting XI`, team.players.filter((p) => p.started).map(playerRow)),
-    team.players.some((p) => !p.started) ? section(`${team.team} · Substitutes`, team.players.filter((p) => !p.started).map(playerRow)) : null,
-    team.staff.length ? section(`${team.team} · Staff`, team.staff.map((s) => h("div", { class: "row" },
+    section(`${displayTeam(team.team)} · Starting XI`, team.players.filter((p) => p.started).map(playerRow)),
+    team.players.some((p) => !p.started) ? section(`${displayTeam(team.team)} · Substitutes`, team.players.filter((p) => !p.started).map(playerRow)) : null,
+    team.staff.length ? section(`${displayTeam(team.team)} · Staff`, team.staff.map((s) => h("div", { class: "row" },
       h("span", { style: "width:90px;color:var(--muted)" }, s.role.charAt(0) + s.role.slice(1).toLowerCase()), s.name))) : null,
   ]);
 }
@@ -701,7 +732,7 @@ function goalsTab(d, state) {
   if (!d.goals.length) return section(null, message(null, state === "upcoming" ? "The match hasn't started yet." : "No goals."));
   return section(null, d.goals.map((g) => h("div", { class: "row" },
     h("span", { class: "minute num" }, `${g.minute}'`),
-    h("div", { class: "grow" }, h("div", {}, `#${g.shirt} ${g.player}`), h("div", { class: "caption" }, `${g.team} · ${g.action}`)),
+    h("div", { class: "grow" }, h("div", {}, `#${g.shirt} ${g.player}`), h("div", { class: "caption" }, `${displayTeam(g.team)} · ${g.action}`)),
     h("strong", { class: "num" }, g.score))));
 }
 
@@ -711,7 +742,7 @@ function cardsTab(d, state) {
     h("span", { class: "minute num" }, `${c.minute}'`),
     h("span", { class: `card-chip card-${c.type.toUpperCase()}` }),
     h("div", { class: "grow" }, h("div", {}, `#${c.shirt} ${c.player}`),
-      h("div", { class: "caption" }, [c.team, c.umpire ? `Umpire: ${c.umpire}` : null].filter(Boolean).join(" · "))))),
+      h("div", { class: "caption" }, [displayTeam(c.team), c.umpire ? `Umpire: ${c.umpire}` : null].filter(Boolean).join(" · "))))),
     "Green = 2 min suspension, yellow = 5–10 min, red = sent off.");
 }
 
@@ -777,15 +808,20 @@ function standingsTab(entry) {
     return entry.standingsError ? section(null, message(null, `Couldn't load standings: ${entry.standingsError}`)) : section(null, spinnerRow());
   }
   if (!entry.standings.length) return section(null, message(null, "No standings yet."));
-  const cols = ["P", "W", "D", "L", "GF", "GA", "GD", "Pts"];
-  return entry.standings.map((pool) => section(pool.pool,
-    h("div", { class: "scroll-x" }, h("table", { class: "tbl num" },
-      h("thead", {}, h("tr", {}, h("th", { class: "left" }, "#"), h("th", { class: "left" }, "Team"), cols.map((c) => h("th", {}, c)))),
-      h("tbody", {}, pool.rows.map((r) => h("tr", {},
-        h("td", { class: "left strong" }, r.rank),
-        h("td", { class: "left" }, h("span", { class: "who" }, flag(P.countryCode(r.team)), h("span", {}, r.team))),
-        r.values.map((v, i) => h("td", { class: i === 7 ? "strong" : "" }, i === 6 && v > 0 ? `+${v}` : v))))))),
-    [...pool.notes, "P played · W won · D drawn · L lost · GF/GA goals for/against · GD goal difference"].join("\n")));
+  const keyText = { P: "P played", W: "W won", D: "D drawn", L: "L lost", GF: "GF goals for", GA: "GA goals against", GD: "GD goal difference" };
+  return entry.standings.map((pool) => {
+    // Only the columns this tournament publishes (Hockey India often has no GF/GA).
+    const shown = P.STANDING_COLUMNS.map((c, i) => [c, i]).filter(([, i]) => pool.rows.some((r) => r.values[i] != null));
+    const cell = (c, v) => (v == null ? "–" : c === "GD" && v > 0 ? `+${v}` : v);
+    return section(pool.pool,
+      h("div", { class: "scroll-x" }, h("table", { class: "tbl num" },
+        h("thead", {}, h("tr", {}, h("th", { class: "left" }, "#"), h("th", { class: "left" }, "Team"), shown.map(([c]) => h("th", {}, c)))),
+        h("tbody", {}, pool.rows.map((r) => h("tr", {},
+          h("td", { class: "left strong" }, r.rank),
+          h("td", { class: "left player" }, h("span", { class: "who" }, flag(teamCodeFor(r.team)), h("span", {}, displayTeam(r.team)))),
+          shown.map(([c, i]) => h("td", { class: c === "Pts" ? "strong" : "" }, cell(c, r.values[i])))))))),
+      [...pool.notes, shown.filter(([c]) => keyText[c]).map(([c]) => keyText[c]).join(" · ")].join("\n"));
+  });
 }
 
 function tournamentStatsTab(entry) {
@@ -794,7 +830,7 @@ function tournamentStatsTab(entry) {
   }
   const { scorers, cards } = entry.stats;
   const playerCell = (r) => h("td", { class: "left player" },
-    h("span", { class: "who" }, flag(r.code), h("span", {}, r.player, h("small", {}, `#${r.shirt} · ${r.team}`))));
+    h("span", { class: "who" }, flag(r.code), h("span", {}, r.player, h("small", {}, `#${r.shirt} · ${displayTeam(r.team)}`))));
   const table = (heads, rows, total, boldLast) => h("div", { class: "scroll-x" }, h("table", { class: "tbl num" },
     h("thead", {}, h("tr", {}, h("th", { class: "left" }, "Player"), heads.map((x) => h("th", {}, x)))),
     h("tbody", {}, rows.map((r) => h("tr", {}, playerCell(r), r.values.map((v, i) =>
@@ -844,7 +880,7 @@ document.addEventListener("visibilitychange", () => {
 // ---------- Team page
 
 function renderTeam(code, category) {
-  const name = P.countryName(code);
+  const name = teamName(code);
   topbar.replaceChildren(subBar(name, category ?? "All categories"));
 
   const team = S.team;
@@ -936,8 +972,8 @@ function renderMenu() {
         h("strong", {}, `${SRC.label} tournaments`),
         h("button", { class: "icon-btn", onclick: closeMenu, "aria-label": "Close menu" }, icon("close"))),
       section("★ Favourite teams", S.favourites.size
-        ? [...S.favourites].sort((a, b) => P.countryName(a).localeCompare(P.countryName(b))).map((code) =>
-            h("a", { class: "row", href: teamHref(code, null) }, flag(code), h("span", { class: "grow" }, P.countryName(code)),
+        ? [...S.favourites].sort((a, b) => teamName(a).localeCompare(teamName(b))).map((code) =>
+            h("a", { class: "row", href: teamHref(code, null) }, flag(code), h("span", { class: "grow" }, teamName(code)),
               h("span", { class: "chev" }, icon("right", 16))))
         : message(null, "Open a team page and tap ☆ Add to favourites.")),
       groups.filter(([, list]) => list.length).map(([title, list]) => section(title, list.map(item))),

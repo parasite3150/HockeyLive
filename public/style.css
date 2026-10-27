@@ -218,3 +218,10 @@ body.no-scroll { overflow: hidden; }
 
 /* International / India Domestic switch */
 .source-switch { max-width: 360px; margin: 0 auto 6px; }
+
+/* India Domestic: code badge in place of a flag */
+.flag.mono {
+  display: inline-grid; place-items: center; font-size: 7px; font-weight: 800; letter-spacing: .02em;
+  color: var(--accent); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.flag.mono.lg { font-size: 15px; }

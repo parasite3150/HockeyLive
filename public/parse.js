@@ -334,24 +334,69 @@ export function parseTournamentStats(doc) {
   return { scorers: read("Goal Scorers", 4), cards: read("Cards", 3) };
 }
 
+// Standings columns, matched by heading (FIH: "Played", Hockey India: "GP" with title="Played").
+export const STANDING_COLUMNS = ["P", "W", "D", "L", "GF", "GA", "GD", "Pts"];
+const COLUMN_NAMES = {
+  P: ["played", "gp", "p"], W: ["wins", "w", "won"], D: ["draws", "d", "drawn"], L: ["losses", "l", "lost"],
+  GF: ["goals for", "gf"], GA: ["goals against", "ga"], GD: ["goal difference", "gd"], Pts: ["points", "pts", "pt"],
+};
+
+/** Every standings table on the page: one per pool, with whichever columns it has. */
 export function parseStandings(doc) {
-  const body = portlet(doc, "Pool Standings")?.querySelector(".portlet-body");
   const pools = [];
-  for (const h4 of body?.querySelectorAll("h4") ?? []) {
-    let el = h4.nextElementSibling;
-    while (el && el.tagName !== "TABLE" && !el.querySelector?.("table")) el = el.nextElementSibling;
-    const table = el?.tagName === "TABLE" ? el : el?.querySelector("table");
-    if (!table) continue;
+  for (const table of doc.querySelectorAll("table")) {
+    const heads = [...(table.querySelector("thead tr") ?? table.querySelector("tr"))?.children ?? []];
+    const labels = heads.map((th) => (th.getAttribute("title") || text(th)).toLowerCase());
+    const teamCol = labels.findIndex((l) => l === "team");
+    // "P" alone is ambiguous (FIH-style "P" = played isn't used; Hockey India uses "P" for points),
+    // so read Points from its title first, then fall back to the last column.
+    const col = {};
+    for (const key of STANDING_COLUMNS) {
+      const names = COLUMN_NAMES[key];
+      let i = labels.findIndex((l) => names.includes(l) && !(key === "P" && l === "p"));
+      if (key === "Pts" && i < 0) i = labels.length - 1;
+      if (i >= 0 && i !== teamCol) col[key] = i;
+    }
+    if (teamCol < 0 || col.Pts == null || col.W == null) continue;
+    const rankCol = labels.findIndex((l) => ["rank", "r", "#"].includes(l));
+
     const rows = [];
     for (const tr of table.querySelectorAll("tr")) {
       const td = cells(tr);
-      if (td.length < 10) continue;
-      const n = td.slice(2, 10).map(num);
-      rows.push({ rank: text(td[0]), team: text(td[1]), values: n });
+      if (td.length <= Math.max(teamCol, col.Pts)) continue;
+      const values = STANDING_COLUMNS.map((k) => (col[k] == null ? null : parseInt(text(td[col[k]]), 10)));
+      if (!text(td[teamCol]) || Number.isNaN(values[STANDING_COLUMNS.indexOf("Pts")])) continue;
+      rows.push({ rank: rankCol >= 0 ? text(td[rankCol]) : String(rows.length + 1), team: text(td[teamCol]), values });
     }
-    if (rows.length) pools.push({ pool: text(h4), notes: captionLines(table.querySelector("caption")), rows });
+    if (!rows.length) continue;
+
+    // Pool name: the <h4> before the table (FIH), or the tab that shows it (Hockey India).
+    let pool = null;
+    const pane = table.closest(".tab-pane[id]");
+    if (pane) pool = text(doc.querySelector(`a[href="#${pane.id}"]`));
+    if (!pool) {
+      let el = table.closest(".table-responsive") ?? table;
+      while (el && !pool) { el = el.previousElementSibling; if (el?.tagName === "H4") pool = text(el); }
+    }
+    pools.push({ pool: pool || "Standings", notes: captionLines(table.querySelector("caption")), rows });
   }
   return pools;
+}
+
+/** Team codes and names from a tournament's summary page ("Teams" box): HAP → HOCKEY ANDHRA PRADESH. */
+export function parseTeamCodes(doc) {
+  const names = new Map();
+  for (const tr of portlet(doc, "Teams")?.querySelectorAll("tr") ?? []) {
+    const td = cells(tr);
+    if (td.length >= 2 && text(td[0]) && /^[A-Z0-9]{2,6}$/.test(text(td[1]))) names.set(text(td[1]), text(td[0]));
+  }
+  return names;
+}
+
+/** "HOCKEY ANDHRA PRADESH" → "Hockey Andhra Pradesh"; "BIHAR (BSSA)" → "Bihar (BSSA)". Mixed case is left alone. */
+export function niceTeamName(name) {
+  if (!name || name !== name.toUpperCase()) return name;
+  return name.split(" ").map((w) => (/^\(.*\)$|^&$/.test(w) ? w : w.charAt(0) + w.slice(1).toLowerCase())).join(" ");
 }
 
 // ---------------------------------------------------------------- Countries
