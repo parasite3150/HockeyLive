@@ -59,15 +59,57 @@ function relativeLabel(key) {
 }
 const spinnerRow = (label = "Loading…") => h("div", { class: "message" }, h("span", { class: "spinner" }), label);
 
+// =================================================================== Site: International (FIH) or India Domestic
+
+const SOURCES = {
+  fih: {
+    label: "International", site: "fih.altiusrt.com", owner: "FIH",
+    hasMatchStats: true,
+  },
+  hi: {
+    label: "India Domestic", site: "hockeyindia.altiusrt.com", owner: "Hockey India",
+    hasMatchStats: false,   // its statistics service isn't known yet
+  },
+};
+
+/**
+ * Each page load shows one site. Links carry it ("#/hi/..." for India Domestic), so
+ * Back and shared links open the right one; switching reloads the page so the two never mix.
+ */
+const hashSource = () => (/^#\/?hi(\/|$)/.test(location.hash) ? "hi" : "fih");
+function savedSource() { try { return localStorage.getItem("hockeylive.source"); } catch { return null; } }
+function saveSource(src) { try { localStorage.setItem("hockeylive.source", src); } catch { /* not saved */ } }
+if (location.hash.replace(/^#\/?/, "") === "" && savedSource() === "hi") history.replaceState(null, "", "#/hi/");
+const SOURCE = hashSource();
+const SRC = SOURCES[SOURCE];
+
+/** In-app link for this site: link("m/123") → "#/m/123" or "#/hi/m/123". */
+const link = (path = "") => `#/${SOURCE === "hi" ? "hi/" : ""}${path}`;
+
+function switchSource(src) {
+  if (src === SOURCE) return;
+  saveSource(src);
+  location.hash = src === "hi" ? "#/hi/" : "#/";   // the hashchange handler reloads into the other site
+}
+
+function renderCredit() {
+  const credit = document.getElementById("credit");
+  credit.replaceChildren(
+    `Data from the ${SRC.owner} / Altius competition website (`,
+    h("a", { href: `https://${SRC.site}`, target: "_blank", rel: "noopener" }, SRC.site),
+    `). Unofficial fan app, not affiliated with ${SRC.owner} or Altius.`);
+}
+
 // =================================================================== Data access (through /api/fih)
 
 async function fetchDoc(path) {
-  const res = await fetch(`/api/fih?path=${encodeURIComponent(path)}`);
-  if (!res.ok) throw new Error(`The FIH site answered with error ${res.status}.`);
+  const res = await fetch(`/api/fih?site=${SOURCE}&path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`The ${SRC.owner} site answered with error ${res.status}.`);
   return new DOMParser().parseFromString(await res.text(), "text/html");
 }
 async function fetchMatchStats(id) {
-  const res = await fetch(`/api/fih?stats=${id}`);
+  if (!SRC.hasMatchStats) throw new Error(`Match statistics aren't available for ${SRC.label} matches yet.`);
+  const res = await fetch(`/api/fih?site=${SOURCE}&stats=${id}`);
   if (!res.ok) throw new Error(`The statistics service answered with error ${res.status}.`);
   return res.json();
 }
@@ -102,7 +144,7 @@ const S = {
 // ---------- Favourite teams (stored in this browser only)
 
 // A function declaration (not a const) because S is created above and calls this at start-up.
-function favouritesKey() { return "hockeylive.favourites"; }
+function favouritesKey() { return SOURCE === "hi" ? "hockeylive.favourites.hi" : "hockeylive.favourites"; }
 function loadFavourites() {
   try {
     const list = JSON.parse(localStorage.getItem(favouritesKey()) || "[]");
@@ -335,7 +377,7 @@ function teamMatches(team) {
     .filter((m) => (m.home === team.code || m.away === team.code) && m.start >= cutoffDate);
 }
 
-const teamHref = (code, category) => `#/team/${encodeURIComponent(code)}${category ? `/${encodeURIComponent(category)}` : ""}`;
+const teamHref = (code, category) => link(`team/${encodeURIComponent(code)}${category ? `/${encodeURIComponent(category)}` : ""}`);
 
 // =================================================================== Routing
 // #/            day list
@@ -344,22 +386,23 @@ const teamHref = (code, category) => `#/team/${encodeURIComponent(code)}${catego
 // #/team/JPN/Under%2021%20Mens%20Outdoor   team page (category optional)
 
 function route() {
-  const [name, id, tab] = location.hash.replace(/^#\/?/, "").split("/");
+  const [name, id, tab] = location.hash.replace(/^#\/?/, "").replace(/^hi(\/|$)/, "").split("/");
   return { name: name || "home", id: Number(id), raw: decodeURIComponent(id ?? ""), tab: tab && decodeURIComponent(tab) };
 }
 function setTab(tab) {
   const r = route();
-  history.replaceState(null, "", `#/${r.name}/${r.id}/${tab}`);
+  history.replaceState(null, "", link(`${r.name}/${r.id}/${tab}`));
   render();
 }
 let inAppSteps = 0;
 function goBack() {
   if (inAppSteps > 0) history.back();
-  else location.hash = "#/";
+  else location.hash = link();
 }
-function goHome() { location.hash = "#/"; }
+function goHome() { location.hash = link(); }
 
 window.addEventListener("hashchange", () => {
+  if (hashSource() !== SOURCE) { location.reload(); return; }   // moved to the other site
   S.menuOpen = false;
   inAppSteps = route().name === "home" ? 0 : inAppSteps + 1;
   window.scrollTo(0, 0);
@@ -394,6 +437,7 @@ const menuButton = () => h("button", {
 const spacer = () => h("span", { class: "icon-btn", "aria-hidden": "true" });
 
 function subBar(title, sub) {
+  if (SOURCE === "hi") sub = sub ? `${sub} · India Domestic` : "India Domestic";
   return h("div", { class: "bar" },
     h("button", { class: "icon-btn", onclick: goBack, "aria-label": "Back" }, icon("left")),
     menuButton(),
@@ -446,7 +490,7 @@ function matchRow(m, { showCompetition = false, showDate = false } = {}) {
     showScore && score != null ? h("span", { class: "score num" }, score) : null);
   const caption = [showCompetition ? m.competition : null, m.number ? `Match ${m.number}` : null, m.stage, m.venue]
     .filter(Boolean).join(" · ");
-  return h("a", { class: `row ${state}`, href: `#/m/${m.id}` },
+  return h("a", { class: `row ${state}`, href: link(`m/${m.id}`) },
     h("div", { class: "time" },
       showDate ? h("span", { class: "d" }, m.start.toLocaleDateString(undefined, { day: "numeric", month: "short" })) : null,
       liveTime(m, state),
@@ -469,6 +513,10 @@ function renderHome() {
     onchange: (e) => jumpTo(e.target.value),
   });
   topbar.replaceChildren(
+    h("div", { class: "source-switch seg", role: "tablist", "aria-label": "Competitions" },
+      Object.entries(SOURCES).map(([key, src]) => h("button", {
+        role: "tab", "aria-selected": String(key === SOURCE), onclick: () => switchSource(key),
+      }, src.label))),
     h("div", { class: "bar" },
       menuButton(),
       h("button", { class: "icon-btn", onclick: () => move(-1), disabled: i <= 0, "aria-label": "Previous day" }, icon("left")),
@@ -501,7 +549,7 @@ function renderHome() {
     .map((x) => x.sec);
   for (const sec of tournamentSections) {
     parts.push(section(
-      h("a", { href: `#/t/${sec.id}` }, sec.name, " ›"),
+      h("a", { href: link(`t/${sec.id}`) }, sec.name, " ›"),
       sec.matches.map((m) => matchRow(m))));
   }
 
@@ -569,7 +617,7 @@ function renderMatch(id, tab = "goals") {
   const compLine = [competition, stage].filter(Boolean).join(" · ");
   const category = base ? S.tournaments.get(base.competitionID)?.category ?? null : null;
   const head = h("div", { class: "match-head" },
-    base?.competitionID ? h("a", { class: "comp", href: `#/t/${base.competitionID}` }, compLine, " ›") : h("div", { class: "comp" }, compLine),
+    base?.competitionID ? h("a", { class: "comp", href: link(`t/${base.competitionID}`) }, compLine, " ›") : h("div", { class: "comp" }, compLine),
     h("div", { class: "sides" },
       teamSide(homeCode, homeName, category),
       h("div", {},
@@ -682,7 +730,7 @@ function matchStatsTab(entry, homeCode, awayCode) {
 function h2hTab(d) {
   if (!d.headToHead.length) return section(null, message(null, "These teams haven't met before."));
   return d.headToHead.map((g) => section(g.category, g.matches.map((m) =>
-    h("a", { class: "row", href: `#/m/${m.id}` },
+    h("a", { class: "row", href: link(`m/${m.id}`) },
       h("div", { class: "grow" },
         h("div", { style: "display:flex;justify-content:space-between;gap:8px" }, h("strong", {}, m.teams), h("strong", { class: "num" }, m.scoreline)),
         h("div", { class: "caption" }, `${m.competition} · ${m.date}`),
@@ -875,7 +923,7 @@ function renderMenu() {
     const f = (k) => P.keyToDate(k).toLocaleDateString(undefined, { day: "numeric", month: "short" });
     return x.startKey === x.endKey ? f(x.startKey) : `${f(x.startKey)} – ${f(x.endKey)} ${x.endKey.slice(0, 4)}`;
   };
-  const item = (x) => h("a", { class: "row", href: `#/t/${x.id}` },
+  const item = (x) => h("a", { class: "row", href: link(`t/${x.id}`) },
     h("div", { class: "grow" },
       h("div", { class: "menu-name" }, x.name),
       h("div", { class: "caption" }, [range(x), x.category, x.location].filter(Boolean).join(" · "))),
@@ -885,7 +933,7 @@ function renderMenu() {
     h("div", { class: "drawer-backdrop", onclick: closeMenu }),
     h("nav", { class: "drawer-panel", "aria-label": "Tournaments" },
       h("div", { class: "drawer-head" },
-        h("strong", {}, "Tournaments"),
+        h("strong", {}, `${SRC.label} tournaments`),
         h("button", { class: "icon-btn", onclick: closeMenu, "aria-label": "Close menu" }, icon("close"))),
       section("★ Favourite teams", S.favourites.size
         ? [...S.favourites].sort((a, b) => P.countryName(a).localeCompare(P.countryName(b))).map((code) =>
@@ -907,6 +955,9 @@ setInterval(() => {
 }, 1000);
 
 // =================================================================== Start
+
+renderCredit();
+document.title = SOURCE === "hi" ? "Hockey Live · India Domestic" : "Hockey Live";
 
 rebuildDays();
 onRoute();

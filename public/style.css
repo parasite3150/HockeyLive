@@ -215,3 +215,6 @@ body.no-scroll { overflow: hidden; }
 .fav-btn { flex-shrink: 0; white-space: nowrap; }
 .fav-btn.on { background: var(--accent-soft); border-color: var(--accent); }
 .team-head .grow { min-width: 0; }
+
+/* International / India Domestic switch */
+.source-switch { max-width: 360px; margin: 0 auto 6px; }
