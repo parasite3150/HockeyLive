@@ -92,6 +92,8 @@ const S = {
   matchDetails: new Map(),  // match id → { detail, stats, detailError, statsError }
   tournamentData: new Map(),// tournament id → { standings, stats, standingsError, statsError }
   menuOpen: false,
+  clocks: new Map(),        // match id → { clock, fetchedAt } for live matches
+  clockLoading: new Set(),
   team: null,               // { code, category, cutoff, ids, busy } for the team page being viewed
   teamCategory: new Map(),  // team code → the category it was last opened with (for the toggle)
 };
@@ -216,12 +218,42 @@ async function refreshHome() {
   changed();
 }
 
+/** Fetch the live clock for a match (from its match page), at most every 25 seconds. */
+async function loadClock(id, force = false) {
+  const known = S.clocks.get(id);
+  if (S.clockLoading.has(id) || (!force && known && Date.now() - known.fetchedAt < 25_000)) return;
+  S.clockLoading.add(id);
+  try {
+    const clock = P.parseLiveClock(await fetchDoc(`/matches/${id}`));
+    if (clock) S.clocks.set(id, { clock, fetchedAt: Date.now() });
+  } catch {
+    // keep showing the kick-off time
+  } finally {
+    S.clockLoading.delete(id);
+    changed();
+  }
+}
+
+/** "23'" while playing, or the break's short name ("HT") when the clock is between periods. */
+function clockText(id) {
+  const entry = S.clocks.get(id);
+  if (!entry) return null;
+  const { clock, fetchedAt } = entry;
+  if (P.matchState(clock.status) !== "live") return null;
+  if (!/quarter|half|period|extra|shoot/i.test(clock.status) || /time/i.test(clock.status)) return clock.short ?? clock.status;
+  return `${P.liveMinute(clock, fetchedAt)}'`;
+}
+
 async function loadMatchDetail(id) {
   const entry = S.matchDetails.get(id) ?? {};
   S.matchDetails.set(id, entry);
   await Promise.all([
     fetchDoc(`/matches/${id}`)
-      .then((doc) => { entry.detail = P.parseMatchPage(doc); entry.detailError = null; })
+      .then((doc) => {
+        entry.detail = P.parseMatchPage(doc);
+        entry.detailError = null;
+        if (entry.detail.live) S.clocks.set(id, { clock: entry.detail.live, fetchedAt: Date.now() });
+      })
       .catch((e) => { entry.detailError = e.message; })
       .finally(changed),
     fetchMatchStats(id)
@@ -370,6 +402,21 @@ function message(title, detail, action) {
 
 // ---------- Match row (used on the day list and the tournament screen)
 
+/** Kick-off time, or for a live match the minute of play (ticks via data-clock). */
+function liveTime(m, state) {
+  if (state !== "live") return h("span", { class: "t num" }, timeText(m.start));
+  loadClock(m.id);
+  const text = clockText(m.id);
+  return text
+    ? h("span", { class: "t num clock", "data-clock": m.id }, text)
+    : h("span", { class: "t num" }, timeText(m.start));
+}
+
+function liveBadge(m) {
+  const short = S.clocks.get(m.id)?.clock.short;
+  return short && !/^(HT|UP|WU|CO|OF)$/.test(short) ? `LIVE · ${short}` : "LIVE";
+}
+
 function matchRow(m, { showCompetition = false, showDate = false } = {}) {
   const state = P.matchState(m.status);
   const showScore = state !== "upcoming";
@@ -381,8 +428,8 @@ function matchRow(m, { showCompetition = false, showDate = false } = {}) {
   return h("a", { class: `row ${state}`, href: `#/m/${m.id}` },
     h("div", { class: "time" },
       showDate ? h("span", { class: "d" }, m.start.toLocaleDateString(undefined, { day: "numeric", month: "short" })) : null,
-      h("span", { class: "t num" }, timeText(m.start)),
-      state === "live" ? h("span", { class: "badge-live" }, "LIVE") : null,
+      liveTime(m, state),
+      state === "live" ? h("span", { class: "badge-live" }, liveBadge(m)) : null,
       state === "finished" ? h("span", { class: "badge-ft" }, "FT") : null,
       state === "finished" && m.scoreNote ? h("span", { class: "caption" }, m.scoreNote) : null),
     h("div", { class: "teams" }, team(m.home, m.homeScore), team(m.away, m.awayScore), h("div", { class: "caption" }, caption)),
@@ -489,7 +536,8 @@ function renderMatch(id, tab = "goals") {
       teamSide(homeCode, homeName, category),
       h("div", {},
         h("div", { class: `big num${state === "live" ? " live" : ""}` }, state === "upcoming" && base ? timeText(base.start) : score),
-        h("div", { class: `status${state === "live" ? " live" : ""}` }, state === "live" ? `LIVE · ${status}` : status),
+        h("div", { class: `status${state === "live" ? " live" : ""}` },
+          state === "live" ? ["LIVE · ", status, clockText(id) && /'$/.test(clockText(id)) ? [" · ", h("span", { "data-clock": id }, clockText(id))] : null] : status),
         base?.scoreNote ? h("div", { class: "meta" }, base.scoreNote) : null),
       teamSide(awayCode, awayName, category)),
     base ? h("div", { class: "meta" },
@@ -648,12 +696,17 @@ setInterval(() => {
   const r = route();
   if (r.name === "home") {
     const liveToday = sectionsFor(P.today()).some((s) => s.matches.some((m) => P.matchState(m.status) === "live"));
-    if (liveToday) covering(P.today()).forEach((t) => loadMatches(t.id, true));
+    if (liveToday) {
+      covering(P.today()).forEach((t) => loadMatches(t.id, true));
+      sectionsFor(P.today()).flatMap((s) => s.matches)
+        .filter((m) => P.matchState(m.status) === "live").forEach((m) => loadClock(m.id, true));
+    }
   } else if (r.name === "m") {
     const status = S.matchDetails.get(r.id)?.detail?.status ?? S.matchIndex.get(r.id)?.status;
     if (P.matchState(status) === "live") loadMatchDetail(r.id);
   } else if (r.name === "t") {
-    if ((S.matchCache.get(r.id) ?? []).some((m) => P.matchState(m.status) === "live")) loadMatches(r.id, true);
+    const live = (S.matchCache.get(r.id) ?? []).filter((m) => P.matchState(m.status) === "live");
+    if (live.length) { loadMatches(r.id, true); live.forEach((m) => loadClock(m.id, true)); }
   }
 }, 30_000);
 
@@ -760,6 +813,14 @@ function renderMenu() {
       S.hasMore ? h("button", { class: "pill load-more", onclick: loadNextCatalogPage, disabled: S.loadingCatalog },
         S.loadingCatalog ? "Loading…" : "Load older tournaments") : null));
 }
+
+// Tick live minutes every second without redrawing the page.
+setInterval(() => {
+  for (const el of document.querySelectorAll("[data-clock]")) {
+    const text = clockText(Number(el.getAttribute("data-clock")));
+    if (text && el.textContent !== text) el.textContent = text;
+  }
+}, 1000);
 
 // =================================================================== Start
 

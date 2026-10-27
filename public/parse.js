@@ -171,6 +171,7 @@ export function parseMatchPage(doc) {
     away: teamHeads[1] ? { name: text(teamHeads[1]), code: flagCode(teamHeads[1]) } : null,
     scoreline: text(doc.querySelector(".match_scoreline")) || null,
     status: text(doc.querySelector(".match_status")) || null,
+    live: parseLiveClock(doc),
     lineups: [], goals: [], cards: [], headToHead: [],
   };
 
@@ -229,6 +230,39 @@ export function parseMatchPage(doc) {
     if (matches.length) detail.headToHead.push({ category: text(h5), matches });
   }
   return detail;
+}
+
+/**
+ * The match clock the site keeps for its own live updates
+ * (the data-pusher-realtime attribute on the match page).
+ */
+export function parseLiveClock(doc) {
+  const raw = doc.querySelector("[data-pusher-realtime]")?.getAttribute("data-pusher-realtime");
+  if (!raw) return null;
+  try {
+    const m = JSON.parse(raw)?.data?.match;
+    if (!m) return null;
+    const period = m.ladder?.[m.status] ?? {};
+    return {
+      status: m.status ?? null,                 // "2nd Quarter", "Half Time", ...
+      short: period.short ?? null,              // "Q2", "HT", ...
+      scoreline: m.scoreline ?? null,
+      seconds: Number(m.seconds) || 0,          // match time elapsed, in seconds
+      periodEnd: Number(period.finish) || null, // minute the current period ends at
+      running: m.clockstatus === "running",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Minute of play for a clock read at `fetchedAt`, counting on while it runs. */
+export function liveMinute(clock, fetchedAt, now = Date.now()) {
+  let seconds = clock.seconds;
+  if (clock.running) seconds += Math.max(0, (now - fetchedAt) / 1000);
+  let minute = Math.max(1, Math.ceil(seconds / 60));
+  if (clock.periodEnd) minute = Math.min(minute, clock.periodEnd);   // don't run past the end of the quarter
+  return minute;
 }
 
 // ---------------------------------------------------------------- Match statistics (JSON)
