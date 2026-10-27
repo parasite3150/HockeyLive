@@ -225,3 +225,19 @@ body.no-scroll { overflow: hidden; }
   color: var(--accent); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
 }
 .flag.mono.lg { font-size: 15px; }
+
+/* India Domestic: blue instead of green (set on <html data-source="hi">). */
+:root[data-source="hi"] {
+  --accent: #1d5fbf;
+  --accent-soft: #e2ebf9;
+  --live: #1668dc;
+  --on-live: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-source="hi"] {
+    --accent: #6ea8ff;
+    --accent-soft: #15253d;
+    --live: #4f9bff;
+    --on-live: #04172f;
+  }
+}

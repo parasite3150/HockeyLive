@@ -993,6 +993,9 @@ setInterval(() => {
 // =================================================================== Start
 
 renderCredit();
+// India Domestic uses blue instead of green (see style.css), including the browser's bar colour.
+document.documentElement.dataset.source = SOURCE;
+document.querySelector('meta[name="theme-color"]')?.setAttribute("content", SOURCE === "hi" ? "#1d4f9e" : "#0e5a3a");
 document.title = SOURCE === "hi" ? "Hockey Live · India Domestic" : "Hockey Live";
 
 rebuildDays();
