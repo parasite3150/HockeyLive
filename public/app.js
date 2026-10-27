@@ -39,9 +39,9 @@ function icon(name, size = 22) {
   return svg;
 }
 
-function flag(code, large = false) {
-  // Domestic teams have no flags: show their code in a small badge instead.
-  if (SOURCE === "hi") return h("span", { class: `flag mono${large ? " lg" : ""}`, "aria-hidden": "true" }, (code ?? "").slice(0, 3));
+function flag(code, large = false, site = "fih") {
+  // Club and state teams have no flags: show their code in a small badge instead.
+  if (!SITES[site]?.flags) return h("span", { class: `flag mono${large ? " lg" : ""}`, "aria-hidden": "true" }, (code ?? "").slice(0, 3));
   const url = P.flagURL(code);
   if (!url) return h("span", { class: `flag${large ? " lg" : ""}` });
   return h("img", { class: `flag${large ? " lg" : ""}`, src: url, alt: "", loading: "lazy", onerror: (e) => { e.target.style.visibility = "hidden"; } });
@@ -63,57 +63,93 @@ function relativeLabel(key) {
 }
 const spinnerRow = (label = "Loading…") => h("div", { class: "message" }, h("span", { class: "spinner" }), label);
 
-// =================================================================== Site: International (FIH) or India Domestic
-
-const SOURCES = {
-  fih: {
-    label: "International", site: "fih.altiusrt.com", owner: "FIH",
-    hasMatchStats: true,
-  },
-  hi: {
-    label: "India Domestic", site: "hockeyindia.altiusrt.com", owner: "Hockey India",
-    hasMatchStats: true,
-  },
-};
+// =================================================================== Sites and views
 
 /**
- * Each page load shows one site. Links carry it ("#/hi/..." for India Domestic), so
- * Back and shared links open the right one; switching reloads the page so the two never mix.
+ * Every Altius competition site the app reads. The order is fixed: a site's position is part of
+ * its tournament and match IDs (see cid), so add new sites at the end and never reorder.
  */
-const hashSource = () => (/^#\/?hi(\/|$)/.test(location.hash) ? "hi" : "fih");
-function savedSource() { try { return localStorage.getItem("hockeylive.source"); } catch { return null; } }
-function saveSource(src) { try { localStorage.setItem("hockeylive.source", src); } catch { /* not saved */ } }
-if (location.hash.replace(/^#\/?/, "") === "" && savedSource() === "hi") history.replaceState(null, "", "#/hi/");
-const SOURCE = hashSource();
-const SRC = SOURCES[SOURCE];
+const SITE_KEYS = ["fih", "hi", "ehf", "ha", "nz", "fhc", "saha", "dhu"];
+const SITES = {
+  fih: { group: "intl", short: "FIH", label: "International", owner: "FIH", host: "fih.altiusrt.com", flags: true },
+  hi: { group: "dom", short: "India", label: "India", owner: "Hockey India", host: "hockeyindia.altiusrt.com" },
+  ha: { group: "dom", short: "Australia", label: "Australia", owner: "Hockey Australia", host: "hockeyaustralia.altiusrt.com" },
+  nz: { group: "dom", short: "New Zealand", label: "New Zealand", owner: "Hockey New Zealand", host: "hockeynz.altiusrt.com" },
+  fhc: { group: "dom", short: "Canada", label: "Canada", owner: "Field Hockey Canada", host: "fhc.altiusrt.com" },
+  saha: { group: "dom", short: "South Africa", label: "South Africa", owner: "South African Hockey Association", host: "saha.altiusrt.com" },
+  dhu: { group: "dom", short: "Denmark", label: "Denmark", owner: "Dansk Hockey Union", host: "dhu.altiusrt.com" },
+};
+const siteList = () => SITE_KEYS.filter((k) => SITES[k]);
+const intlSites = () => siteList().filter((k) => SITES[k].group === "intl");
+const domSites = () => siteList().filter((k) => SITES[k].group === "dom");
 
-/** In-app link for this site: link("m/123") → "#/m/123" or "#/hi/m/123". */
-const link = (path = "") => `#/${SOURCE === "hi" ? "hi/" : ""}${path}`;
+/** IDs that are unique across sites: FIH IDs are unchanged (so old links still work), others are offset. */
+const ID_SPAN = 1e8;
+const cid = (site, raw) => SITE_KEYS.indexOf(site) * ID_SPAN + Number(raw);
+const siteOf = (id) => SITE_KEYS[Math.floor(id / ID_SPAN)] ?? "fih";
+const rawId = (id) => id % ID_SPAN;
 
-function switchSource(src) {
-  if (src === SOURCE) return;
-  saveSource(src);
-  location.hash = src === "hi" ? "#/hi/" : "#/";   // the hashchange handler reloads into the other site
+// The view chosen with the switch: All, International, or one Domestic league.
+function readPref(key, fallback) { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } }
+function writePref(key, value) { try { localStorage.setItem(key, value); } catch { /* not saved */ } }
+let VIEW = readPref("hockeylive.view", readPref("hockeylive.source", "fih") === "hi" ? "dom" : "all");
+let LEAGUE = readPref("hockeylive.league", "hi");
+if (!["all", "intl", "dom"].includes(VIEW)) VIEW = "all";
+if (!SITES[LEAGUE] || SITES[LEAGUE].group !== "dom") LEAGUE = "hi";
+
+/** Sites shown in the current view. */
+const activeSites = () => (VIEW === "all" ? siteList() : VIEW === "intl" ? intlSites() : [LEAGUE]);
+const isActive = (site) => activeSites().includes(site);
+
+/** In-app link: link("m/123") → "#/m/123". */
+const link = (path = "") => `#/${path}`;
+
+function setView(view, league = LEAGUE) {
+  VIEW = view; LEAGUE = league;
+  writePref("hockeylive.view", view); writePref("hockeylive.league", league);
+  applyTheme();
+  rebuildDays();
+  if (!S.days.includes(S.selected)) S.selected = P.today();
+  changed();
+  startSites();
 }
 
-function renderCredit() {
+/** Domestic leagues are blue, International and All are green (see style.css). */
+function applyTheme(blue = VIEW === "dom") {
+  document.documentElement.dataset.source = blue ? "hi" : "fih";
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", blue ? "#1d4f9e" : "#0e5a3a");
+  document.title = VIEW === "dom" ? `Hockey Live · ${SITES[LEAGUE].label}` : "Hockey Live";
+}
+
+/** "India Domestic", "Euro Hockey"; nothing for FIH. */
+const siteTag = (site) => (!site || site === "fih" || !SITES[site] ? null
+  : SITES[site].group === "dom" ? `${SITES[site].label} Domestic` : SITES[site].label);
+
+/** Data credit for the sites on screen (one site on match/tournament/team pages, else the view). */
+function renderCredit(sites = activeSites()) {
   const credit = document.getElementById("credit");
-  credit.replaceChildren(
-    `Data from the ${SRC.owner} / Altius competition website (`,
-    h("a", { href: `https://${SRC.site}`, target: "_blank", rel: "noopener" }, SRC.site),
-    `). Unofficial fan app, not affiliated with ${SRC.owner} or Altius.`);
+  const a = (k, text) => h("a", { href: `https://${SITES[k].host}`, target: "_blank", rel: "noopener" }, text);
+  if (sites.length === 1) {
+    const k = sites[0];
+    credit.replaceChildren(`Data from the ${SITES[k].owner} / Altius competition website (`, a(k, SITES[k].host),
+      `). Unofficial fan app, not affiliated with ${SITES[k].owner} or Altius.`);
+    return;
+  }
+  // Several sites: each association's name links to its site, to keep the footer short.
+  credit.replaceChildren("Data from the Altius competition websites of ",
+    ...sites.flatMap((k, i) => [i ? (i === sites.length - 1 ? " and " : ", ") : "", a(k, SITES[k].owner)]),
+    ". Unofficial fan app, not affiliated with these associations or Altius.");
 }
 
 // =================================================================== Data access (through /api/fih)
 
-async function fetchDoc(path) {
-  const res = await fetch(`/api/fih?site=${SOURCE}&path=${encodeURIComponent(path)}`);
-  if (!res.ok) throw new Error(`The ${SRC.owner} site answered with error ${res.status}.`);
+async function fetchDoc(site, path) {
+  const res = await fetch(`/api/fih?site=${site}&path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`The ${SITES[site].owner} site answered with error ${res.status}.`);
   return new DOMParser().parseFromString(await res.text(), "text/html");
 }
 async function fetchMatchStats(id) {
-  if (!SRC.hasMatchStats) throw new Error(`Match statistics aren't available for ${SRC.label} matches yet.`);
-  const res = await fetch(`/api/fih?site=${SOURCE}&stats=${id}`);
+  const res = await fetch(`/api/fih?site=${siteOf(id)}&stats=${rawId(id)}`);
   if (!res.ok) throw new Error(`The statistics service answered with error ${res.status}.`);
   return res.json();
 }
@@ -126,10 +162,7 @@ const S = {
   matchIndex: new Map(),    // match id → match (for the match screen header)
   loading: new Set(),
   failed: new Set(),
-  nextPage: 1,
-  hasMore: true,
-  loadingCatalog: false,
-  catalogError: null,
+  catalogs: {},             // site → { nextPage, hasMore, loading, error } for its tournament list
   jumping: false,
   pinned: new Set([P.today()]),   // days shown even with nothing on: today, dates jumped to
   days: [P.today()],
@@ -140,32 +173,54 @@ const S = {
   menuOpen: false,
   clocks: new Map(),        // match id → { clock, fetchedAt } for live matches
   clockLoading: new Set(),
-  favourites: loadFavourites(),   // team codes, e.g. "IND", kept in this browser
+  favourites: loadFavourites(),   // teams as "site:code", e.g. "fih:IND", kept in this browser
+  favTournaments: loadFavTournaments(),   // tournament id → saved summary
   team: null,               // { code, category, cutoff, ids, busy } for the team page being viewed
-  teamNames: new Map(),     // India Domestic: team code → full name (HAP → Hockey Andhra Pradesh)
+  teamNames: new Map(),     // "site:code" → full name (hi:HAP → HOCKEY ANDHRA PRADESH), for sites without country codes
   namesLoaded: new Set(),   // tournaments whose team names have been read
-  teamCategory: new Map(),  // team code → the category it was last opened with (for the toggle)
+  teamCategory: new Map(),  // "site:code" → the category it was last opened with (for the toggle)
 };
 
 // ---------- Favourite teams (stored in this browser only)
 
-// A function declaration (not a const) because S is created above and calls this at start-up.
-function favouritesKey() { return SOURCE === "hi" ? "hockeylive.favourites.hi" : "hockeylive.favourites"; }
-function loadFavourites() {
-  try {
-    const list = JSON.parse(localStorage.getItem(favouritesKey()) || "[]");
-    return new Set(Array.isArray(list) ? list.filter((c) => typeof c === "string") : []);
-  } catch {
-    return new Set();
-  }
+// Function declarations (not consts) because S is created above and calls these at start-up.
+function readList(key) {
+  try { const v = JSON.parse(localStorage.getItem(key) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; }
 }
-function toggleFavourite(code) {
-  if (S.favourites.has(code)) S.favourites.delete(code); else S.favourites.add(code);
-  try { localStorage.setItem(favouritesKey(), JSON.stringify([...S.favourites])); } catch { /* private mode: keep for this visit */ }
+function loadFavourites() {
+  const saved = readList("hockeylive.favteams");
+  if (saved.length || localStorage.getItem?.("hockeylive.favteams")) return new Set(saved.filter((c) => typeof c === "string"));
+  // First run after the update: bring over the old per-mode lists.
+  return new Set([...readList("hockeylive.favourites").map((c) => `fih:${c}`), ...readList("hockeylive.favourites.hi").map((c) => `hi:${c}`)]);
+}
+/** Favourite tournaments: id → { id, name, site, startKey, endKey, category } (kept so the menu can list them before they load). */
+function loadFavTournaments() {
+  return new Map(readList("hockeylive.favtournaments").filter((t) => Number.isFinite(t?.id)).map((t) => [t.id, t]));
+}
+function saveList(key, set) { try { localStorage.setItem(key, JSON.stringify([...set])); } catch { /* private mode: keep for this visit */ } }
+
+const teamKey = (site, code) => `${site}:${code}`;
+function toggleFavourite(site, code) {
+  const k = teamKey(site, code);
+  if (S.favourites.has(k)) S.favourites.delete(k); else S.favourites.add(k);
+  saveList("hockeylive.favteams", S.favourites);
   syncAlerts();   // keep goal alerts in step with the favourites
   render();
 }
-const isFavouriteMatch = (m) => S.favourites.has(m.home) || S.favourites.has(m.away);
+function toggleFavTournament(id) {
+  if (S.favTournaments.has(id)) S.favTournaments.delete(id);
+  else {
+    const t = S.tournaments.get(id), m = S.matchCache.get(id)?.[0];
+    S.favTournaments.set(id, {
+      id, site: siteOf(id), name: t?.name ?? m?.competition ?? "Tournament",
+      startKey: t?.startKey ?? null, endKey: t?.endKey ?? null, category: t?.category ?? null,
+    });
+  }
+  saveList("hockeylive.favtournaments", S.favTournaments.values());
+  render();
+}
+const isFavTeam = (site, code) => S.favourites.has(teamKey(site, code));
+const isFavouriteMatch = (m) => isFavTeam(m.site, m.home) || isFavTeam(m.site, m.away);
 
 // ---------- Goal alerts (web push) for favourite teams
 
@@ -177,10 +232,11 @@ let alertsBusy = false;
 function alertsOn() { try { return localStorage.getItem("hockeylive.alerts") === "on"; } catch { return false; } }
 function setAlertsOn(on) { try { localStorage.setItem("hockeylive.alerts", on ? "on" : "off"); } catch { /* not saved */ } }
 
-/** Favourites for both modes (alerts cover International and India Domestic). */
+/** Favourite teams grouped by site, for the alerts service: { fih: ["IND"], hi: ["HAP"] }. */
 function allFavourites() {
-  const read = (key) => { try { return JSON.parse(localStorage.getItem(key) || "[]"); } catch { return []; } };
-  return { fih: read("hockeylive.favourites"), hi: read("hockeylive.favourites.hi") };
+  const out = {};
+  for (const k of S.favourites) { const [site, code] = k.split(":"); (out[site] ??= []).push(code); }
+  return out;
 }
 
 function keyBytes(base64) {
@@ -273,59 +329,81 @@ function changed() {
 
 function covering(key) {
   return [...S.tournaments.values()]
-    .filter((t) => P.addDays(t.startKey, -1) <= key && key <= P.addDays(t.endKey, 1))   // ±1 day for time zones
+    .filter((t) => isActive(t.site) && P.addDays(t.startKey, -1) <= key && key <= P.addDays(t.endKey, 1))   // ±1 day for time zones
     .sort((a, b) => a.startKey.localeCompare(b.startKey));
 }
 
 function rebuildDays() {
   const keys = new Set(S.pinned);
-  for (const t of S.tournaments.values()) P.dayRange(t.startKey, t.endKey).forEach((k) => keys.add(k));
-  for (const list of S.matchCache.values()) list.forEach((m) => keys.add(P.dayKey(m.start)));
+  for (const t of S.tournaments.values()) if (isActive(t.site)) P.dayRange(t.startKey, t.endKey).forEach((k) => keys.add(k));
+  for (const list of S.matchCache.values()) list.forEach((m) => { if (isActive(m.site)) keys.add(P.dayKey(m.start)); });
   S.days = [...keys].sort();
 }
 
-async function loadCatalogPage(page) {
-  S.loadingCatalog = true;
+const catalog = (site) => (S.catalogs[site] ??= { nextPage: 1, hasMore: true, loading: false, error: null });
+const anyCatalogLoading = () => activeSites().some((k) => catalog(k).loading);
+const anyMoreCatalog = () => activeSites().some((k) => catalog(k).hasMore);
+const catalogError = () => activeSites().map((k) => catalog(k).error).find(Boolean) ?? null;
+
+async function loadCatalogPage(site, page) {
+  const c = catalog(site);
+  c.loading = true;
   try {
-    const { tournaments, hasMore } = P.parseCatalog(await fetchDoc(`/competitions?view=all&page=${page}`));
-    tournaments.forEach((t) => S.tournaments.set(t.id, t));
-    if (page === S.nextPage) { S.nextPage += 1; S.hasMore = hasMore; }
-    S.catalogError = null;
+    const { tournaments, hasMore } = P.parseCatalog(await fetchDoc(site, `/competitions?view=all&page=${page}`));
+    for (const t of tournaments) S.tournaments.set(cid(site, t.id), { ...t, id: cid(site, t.id), site });
+    if (page === c.nextPage) { c.nextPage += 1; c.hasMore = hasMore; }
+    c.error = null;
     S.lastUpdated = new Date();
     rebuildDays();
   } catch (e) {
-    S.catalogError = e.message;
+    c.error = e.message;
   } finally {
-    S.loadingCatalog = false;
+    c.loading = false;
     saveSnapshotSoon();
     changed();
   }
 }
+/** Next (older) page of every active site's tournament list. */
 async function loadNextCatalogPage() {
-  if (!S.hasMore || S.loadingCatalog) return;
-  await loadCatalogPage(S.nextPage);
+  await Promise.all(activeSites().map((k) => {
+    const c = catalog(k);
+    return c.hasMore && !c.loading ? loadCatalogPage(k, c.nextPage) : null;
+  }));
 }
 
-/** Team name for display: the domestic name table, else the country name. */
-function teamName(code) {
-  const name = S.teamNames.get(code);
+/** First page of each active site's list (once), favourite tournaments still running, then the selected day. */
+async function startSites() {
+  await Promise.all([
+    ...activeSites().filter((k) => catalog(k).nextPage === 1 && !catalog(k).loading).map((k) => loadCatalogPage(k, 1)),
+    // Long leagues can be further down their site's list than page 1, so fetch these directly.
+    ...[...S.favTournaments.values()]
+      .filter((f) => isActive(f.site) && (!f.endKey || f.endKey >= P.addDays(P.today(), -7)))
+      .map((f) => loadMatches(f.id)),
+  ]);
+  await ensureDay(S.selected);
+}
+
+/** Team name for display: the site's team list, else the country name. */
+function teamName(code, site = "fih") {
+  const name = S.teamNames.get(teamKey(site, code));
   return name ? P.niceTeamName(name) : P.countryName(code);
 }
 /** Team code for a full name (standings and statistics only show names). */
-function teamCodeFor(name) {
-  if (SOURCE !== "hi") return P.countryCode(name);
-  const wanted = String(name).toLowerCase();
-  for (const [code, full] of S.teamNames) if (full.toLowerCase() === wanted) return code;
+function teamCodeFor(name, site = "fih") {
+  if (SITES[site]?.flags) return P.countryCode(name);
+  const wanted = String(name).toLowerCase(), prefix = `${site}:`;
+  for (const [k, full] of S.teamNames) if (k.startsWith(prefix) && full.toLowerCase() === wanted) return k.slice(prefix.length);
   return null;
 }
-const displayTeam = (name) => (SOURCE === "hi" ? P.niceTeamName(name) : name);
+const displayTeam = (name, site = "fih") => (SITES[site]?.flags ? name : P.niceTeamName(name));
 
-/** India Domestic: read a tournament's team codes and names (once). */
+/** Sites without country codes: read a tournament's team codes and names (once). */
 async function loadTeamNames(id) {
-  if (SOURCE !== "hi" || S.namesLoaded.has(id)) return;
+  const site = siteOf(id);
+  if (SITES[site]?.flags || S.namesLoaded.has(id)) return;
   S.namesLoaded.add(id);
   try {
-    for (const [code, name] of P.parseTeamCodes(await fetchDoc(`/competitions/${id}`))) S.teamNames.set(code, name);
+    for (const [code, name] of P.parseTeamCodes(await fetchDoc(site, `/competitions/${rawId(id)}`))) S.teamNames.set(teamKey(site, code), name);
     changed();
   } catch {
     S.namesLoaded.delete(id);   // try again next time
@@ -338,7 +416,9 @@ async function loadMatches(id, force = false) {
   S.loading.add(id);
   changed();
   try {
-    const matches = P.parseMatchListing(await fetchDoc(`/competitions/${id}/matches`), id);
+    const site = siteOf(id);
+    const matches = P.parseMatchListing(await fetchDoc(site, `/competitions/${rawId(id)}/matches`), id)
+      .map((m) => ({ ...m, id: cid(site, m.id), site }));
     S.matchCache.set(id, matches);
     matches.forEach((m) => S.matchIndex.set(m.id, m));
     S.failed.delete(id);
@@ -355,7 +435,7 @@ async function loadMatches(id, force = false) {
 /** Load what a day (and the days either side) needs; fetch older tournaments near the start. */
 async function ensureDay(key) {
   const i = S.days.indexOf(key);
-  if (i >= 0 && i <= 3 && S.hasMore) await loadNextCatalogPage();
+  if (i >= 0 && i <= 3 && anyMoreCatalog()) await loadNextCatalogPage();
   const ids = new Set([key, P.addDays(key, -1), P.addDays(key, 1)].flatMap((k) => covering(k)).map((t) => t.id));
   await Promise.all([...ids].map((id) => loadMatches(id)));
 }
@@ -370,14 +450,17 @@ function move(step) {
   const next = S.days[i + step];
   if (next) selectDay(next);
 }
-const oldestStart = () => [...S.tournaments.values()].map((t) => t.startKey).sort()[0] ?? "9999";
+const oldestStart = (site) => [...S.tournaments.values()].filter((t) => t.site === site).map((t) => t.startKey).sort()[0] ?? "9999";
 
-/** Load older pages of the tournament list until it reaches back to `key`. */
-async function loadCatalogBackTo(key) {
-  while (S.hasMore && oldestStart() > key) {
-    if (S.loadingCatalog) await new Promise((r) => setTimeout(r, 200));
-    else { await loadNextCatalogPage(); if (S.catalogError) break; }
-  }
+/** Load older pages of each site's tournament list until it reaches back to `key`. */
+async function loadCatalogBackTo(key, sites = activeSites()) {
+  await Promise.all(sites.map(async (site) => {
+    const c = catalog(site);
+    while (c.hasMore && oldestStart(site) > key) {
+      if (c.loading) await new Promise((r) => setTimeout(r, 200));
+      else { await loadCatalogPage(site, c.nextPage); if (c.error) break; }
+    }
+  }));
 }
 
 async function jumpTo(key) {
@@ -393,7 +476,7 @@ async function jumpTo(key) {
 
 function sectionsFor(key) {
   const dayMatches = [...S.matchCache.values()].flat()
-    .filter((m) => P.dayKey(m.start) === key)
+    .filter((m) => isActive(m.site) && P.dayKey(m.start) === key)
     .sort((a, b) => a.start - b.start);
   const groups = new Map();
   for (const m of dayMatches) {
@@ -406,7 +489,7 @@ const isLoadingDay = (key) => covering(key).some((t) => S.loading.has(t.id) || (
 const hasFailures = (key) => covering(key).some((t) => S.failed.has(t.id));
 
 async function refreshHome() {
-  await loadCatalogPage(1);
+  await Promise.all(activeSites().map((k) => loadCatalogPage(k, 1)));
   const ids = new Set([...covering(S.selected), ...covering(P.today())].map((t) => t.id));
   await Promise.all([...ids].map((id) => loadMatches(id, true)));
   S.lastUpdated = new Date();
@@ -419,7 +502,7 @@ async function loadClock(id, force = false) {
   if (S.clockLoading.has(id) || (!force && known && Date.now() - known.fetchedAt < 25_000)) return;
   S.clockLoading.add(id);
   try {
-    const clock = P.parseLiveClock(await fetchDoc(`/matches/${id}`));
+    const clock = P.parseLiveClock(await fetchDoc(siteOf(id), `/matches/${rawId(id)}`));
     if (clock) S.clocks.set(id, { clock, fetchedAt: Date.now() });
   } catch {
     // keep showing the kick-off time
@@ -443,7 +526,7 @@ async function loadMatchDetail(id) {
   const entry = S.matchDetails.get(id) ?? {};
   S.matchDetails.set(id, entry);
   await Promise.all([
-    fetchDoc(`/matches/${id}`)
+    fetchDoc(siteOf(id), `/matches/${rawId(id)}`)
       .then((doc) => {
         entry.detail = P.parseMatchPage(doc);
         entry.detailError = null;
@@ -463,11 +546,11 @@ async function loadTournament(id) {
   S.tournamentData.set(id, entry);
   await Promise.all([
     loadMatches(id, true),
-    fetchDoc(`/competitions/${id}/pools`)
+    fetchDoc(siteOf(id), `/competitions/${rawId(id)}/pools`)
       .then((doc) => { entry.standings = P.parseStandings(doc); entry.standingsError = null; })
       .catch((e) => { entry.standingsError = e.message; })
       .finally(changed),
-    fetchDoc(`/competitions/${id}/statistics`)
+    fetchDoc(siteOf(id), `/competitions/${rawId(id)}/statistics`)
       .then((doc) => { entry.stats = P.parseTournamentStats(doc); entry.statsError = null; })
       .catch((e) => { entry.statsError = e.message; })
       .finally(changed),
@@ -486,16 +569,17 @@ async function inBatches(items, limit, work) {
  * Team page: every tournament from 6 months ago onwards (in the same category,
  * unless "All categories" is chosen), then that team's matches from each.
  */
-async function loadTeam(code, category) {
+async function loadTeam(key, category) {
+  const [site, code] = splitTeam(key);
   const cutoff = P.addDays(P.today(), -183);
-  const team = { code, category, cutoff, ids: [], busy: true };
-  if (category) S.teamCategory.set(code, category);
+  const team = { key, site, code, category, cutoff, ids: [], busy: true };
+  if (category) S.teamCategory.set(key, category);
   S.team = team;
   changed();
-  await loadCatalogBackTo(cutoff);
+  await loadCatalogBackTo(cutoff, [site]);
   if (S.team !== team) return;   // the viewer moved on
   team.ids = [...S.tournaments.values()]
-    .filter((t) => t.endKey >= cutoff && (!category || t.category === category))
+    .filter((t) => t.site === site && t.endKey >= cutoff && (!category || t.category === category))
     .sort((a, b) => b.startKey.localeCompare(a.startKey))
     .map((t) => t.id);
   changed();
@@ -510,11 +594,14 @@ function teamMatches(team) {
     .filter((m) => (m.home === team.code || m.away === team.code) && m.start >= cutoffDate);
 }
 
-const teamHref = (code, category) => link(`team/${encodeURIComponent(code)}${category ? `/${encodeURIComponent(category)}` : ""}`);
+/** "hi:HAP" → ["hi", "HAP"]. */
+const splitTeam = (key) => { const i = key.indexOf(":"); return [key.slice(0, i), key.slice(i + 1)]; };
+const teamHref = (site, code, category) =>
+  link(`team/${encodeURIComponent(teamKey(site, code))}${category ? `/${encodeURIComponent(category)}` : ""}`);
 
 // =================================================================== Quick start: last data kept on this device
 
-const SNAPSHOT_KEY = `hockeylive.snapshot.${SOURCE}`;
+const SNAPSHOT_KEY = "hockeylive.snapshot.v2";
 const SNAPSHOT_MAX_AGE = 12 * 3600 * 1000;
 let snapshotTimer = null;
 
@@ -557,11 +644,18 @@ function restoreSnapshot() {
 // #/            day list
 // #/m/123/goals match screen (tab optional)
 // #/t/1926/standings tournament screen (tab optional)
-// #/team/JPN/Under%2021%20Mens%20Outdoor   team page (category optional)
+// #/team/fih%3AJPN/Under%2021%20Mens%20Outdoor   team page ("site:code", category optional)
+// Match and tournament IDs carry their site (see cid). Older links (#/hi/m/6826, #/team/JPN) still work.
 
 function route() {
-  const [name, id, tab] = location.hash.replace(/^#\/?/, "").replace(/^hi(\/|$)/, "").split("/");
-  return { name: name || "home", id: Number(id), raw: decodeURIComponent(id ?? ""), tab: tab && decodeURIComponent(tab) };
+  let path = location.hash.replace(/^#\/?/, "");
+  const legacy = /^hi(\/|$)/.test(path);
+  if (legacy) path = path.replace(/^hi\/?/, "");
+  const [name, id, tab] = path.split("/");
+  let num = Number(id), raw = decodeURIComponent(id ?? "");
+  if (legacy && (name === "m" || name === "t")) num = cid("hi", num);
+  if (name === "team" && raw && !raw.includes(":")) raw = teamKey(legacy ? "hi" : "fih", raw);
+  return { name: name || "home", id: num, raw, tab: tab && decodeURIComponent(tab) };
 }
 function setTab(tab) {
   const r = route();
@@ -576,7 +670,6 @@ function goBack() {
 function goHome() { location.hash = link(); }
 
 window.addEventListener("hashchange", () => {
-  if (hashSource() !== SOURCE) { location.reload(); return; }   // moved to the other site
   S.menuOpen = false;
   inAppSteps = route().name === "home" ? 0 : inAppSteps + 1;
   window.scrollTo(0, 0);
@@ -596,8 +689,20 @@ function onRoute() {
 const topbar = document.getElementById("topbar");
 const view = document.getElementById("view");
 
+/** The site a match, tournament or team page belongs to (null on the day list). */
+function pageSite(r = route()) {
+  if ((r.name === "m" || r.name === "t") && r.id) return siteOf(r.id);
+  if (r.name === "team" && r.raw) return splitTeam(r.raw)[0];
+  return null;
+}
+
+let creditFor = "";
 function render() {
   const r = route();
+  const site = pageSite(r);
+  applyTheme(site ? SITES[site]?.group === "dom" : VIEW === "dom");
+  const sites = site && SITES[site] ? [site] : activeSites();
+  if (creditFor !== sites.join()) { creditFor = sites.join(); renderCredit(sites); }
   if (r.name === "m" && r.id) renderMatch(r.id, r.tab);
   else if (r.name === "t" && r.id) renderTournament(r.id, r.tab);
   else if (r.name === "team" && r.raw) renderTeam(r.raw, r.tab || null);
@@ -611,7 +716,8 @@ const menuButton = () => h("button", {
 const spacer = () => h("span", { class: "icon-btn", "aria-hidden": "true" });
 
 function subBar(title, sub, extraButton = null) {
-  if (SOURCE === "hi") sub = sub ? `${sub} · India Domestic` : "India Domestic";
+  const tag = siteTag(pageSite());
+  if (tag) sub = sub ? `${sub} · ${tag}` : tag;
   return h("div", { class: "bar" },
     h("button", { class: "icon-btn", onclick: goBack, "aria-label": "Back" }, icon("left")),
     menuButton(),
@@ -659,8 +765,8 @@ function matchRow(m, { showCompetition = false, showDate = false } = {}) {
   const state = P.matchState(m.status);
   const showScore = state !== "upcoming";
   const team = (code, score) => h("div", { class: "team" },
-    flag(code), h("span", { class: "name" }, teamName(code),
-      S.favourites.has(code) ? h("span", { class: "fav-star", "aria-label": "Favourite" }, " ★") : null),
+    flag(code, false, m.site), h("span", { class: "name" }, teamName(code, m.site),
+      isFavTeam(m.site, code) ? h("span", { class: "fav-star", "aria-label": "Favourite" }, " ★") : null),
     showScore && score != null ? h("span", { class: "score num" }, score) : null);
   const caption = [showCompetition ? m.competition : null, m.number ? `Match ${m.number}` : null, m.stage, m.venue]
     .filter(Boolean).join(" · ");
@@ -686,11 +792,17 @@ function renderHome() {
     type: "date", value: key, "aria-label": "Choose a date",
     onchange: (e) => jumpTo(e.target.value),
   });
+  const views = [["all", "All", "src-all"], ["intl", "International", "src-fih"], ["dom", "Domestic", "src-hi"]];
   topbar.replaceChildren(
     h("div", { class: "source-switch seg", role: "tablist", "aria-label": "Competitions" },
-      Object.entries(SOURCES).map(([key, src]) => h("button", {
-        class: `src-${key}`, role: "tab", "aria-selected": String(key === SOURCE), onclick: () => switchSource(key),
-      }, h("span", { class: "src-dot", "aria-hidden": "true" }), src.label))),
+      views.map(([v, label, cls]) => h("button", {
+        class: cls, role: "tab", "aria-selected": String(v === VIEW), onclick: () => v !== VIEW && setView(v),
+      }, h("span", { class: "src-dot", "aria-hidden": "true" }), label))),
+    // Domestic: choose the country's league.
+    VIEW === "dom" ? h("div", { class: "league-chips", role: "tablist", "aria-label": "Domestic league" },
+      domSites().map((k) => h("button", {
+        class: "chip", role: "tab", "aria-selected": String(k === LEAGUE), onclick: () => k !== LEAGUE && setView("dom", k),
+      }, SITES[k].short))) : "",
     h("div", { class: "bar" },
       menuButton(),
       h("button", { class: "icon-btn", onclick: () => move(-1), disabled: i <= 0, "aria-label": "Previous day" }, icon("left")),
@@ -716,24 +828,29 @@ function renderHome() {
     .sort((a, b) => a.start - b.start);
   if (favourites.length) parts.push(section("★ Favourites", favourites.map((m) => matchRow(m, { showCompetition: true }))));
 
-  // Tournaments with a favourite team playing come first; otherwise the usual order.
+  // Favourite tournaments first, then tournaments with a favourite team playing,
+  // then international before domestic; otherwise the usual order.
+  const intl = (sec) => SITES[siteOf(sec.id)]?.group === "intl";
   const tournamentSections = sectionsFor(key)
-    .map((sec, i) => ({ sec, i, fav: sec.matches.some(isFavouriteMatch) }))
-    .sort((a, b) => (b.fav - a.fav) || (a.i - b.i))
+    .map((sec, i) => ({ sec, i, favT: S.favTournaments.has(sec.id), fav: sec.matches.some(isFavouriteMatch), intl: intl(sec) }))
+    .sort((a, b) => (b.favT - a.favT) || (b.fav - a.fav) || (b.intl - a.intl) || (a.i - b.i))
     .map((x) => x.sec);
   for (const sec of tournamentSections) {
+    const tag = VIEW === "dom" ? null : siteTag(siteOf(sec.id));
     parts.push(section(
-      h("a", { href: link(`t/${sec.id}`) }, sec.name, " ›"),
+      h("a", { href: link(`t/${sec.id}`) },
+        S.favTournaments.has(sec.id) ? h("span", { class: "fav-star", "aria-label": "Favourite tournament" }, "★ ") : null,
+        sec.name, tag ? h("span", { class: "site-tag" }, tag) : null, " ›"),
       sec.matches.map((m) => matchRow(m))));
   }
 
-  const loading = isLoadingDay(key) || (S.loadingCatalog && !S.tournaments.size);
+  const loading = isLoadingDay(key) || (anyCatalogLoading() && !covering(key).length && !sectionsFor(key).length);
   if (loading) {
     parts.push(section(null, spinnerRow("Loading matches…")));
   } else if (!sectionsFor(key).length) {
     const title = key === P.today() ? "No matches today" : "No matches on this day";
-    parts.push(section(null, S.catalogError && !S.tournaments.size
-      ? message(title, `Couldn't load tournaments: ${S.catalogError}`,
+    parts.push(section(null, catalogError() && !covering(key).length
+      ? message(title, `Couldn't load tournaments: ${catalogError()}`,
           h("div", {}, h("button", { class: "pill", onclick: refreshHome, style: "margin-top:10px" }, "Try again")))
       : message(title, "Swipe or use the arrows to see other days.")));
   }
@@ -776,6 +893,7 @@ function renderMatch(id, tab = "goals") {
   const entry = S.matchDetails.get(id) ?? {};
   const d = entry.detail;
 
+  const site = siteOf(id);
   topbar.replaceChildren(subBar(base?.number ? `Match ${base.number}` : "Match", null,
     h("button", { class: "icon-btn", onclick: () => shareMatch(id), "aria-label": "Share this match" }, icon("share"))));
 
@@ -783,8 +901,8 @@ function renderMatch(id, tab = "goals") {
   const state = P.matchState(status);
   const homeCode = base?.home ?? d?.home?.code;
   const awayCode = base?.away ?? d?.away?.code;
-  const homeName = base ? teamName(base.home) : displayTeam(d?.home?.name ?? "");
-  const awayName = base ? teamName(base.away) : displayTeam(d?.away?.name ?? "");
+  const homeName = base ? teamName(base.home, site) : displayTeam(d?.home?.name ?? "", site);
+  const awayName = base ? teamName(base.away, site) : displayTeam(d?.away?.name ?? "", site);
   const competition = base?.competition ?? d?.competition;
   const stage = base?.stage ?? d?.stage;
   const score = d?.scoreline || (base && base.homeScore != null ? `${base.homeScore} - ${base.awayScore}` : "–");
@@ -794,20 +912,20 @@ function renderMatch(id, tab = "goals") {
   const head = h("div", { class: "match-head" },
     base?.competitionID ? h("a", { class: "comp", href: link(`t/${base.competitionID}`) }, compLine, " ›") : h("div", { class: "comp" }, compLine),
     h("div", { class: "sides" },
-      teamSide(homeCode, homeName, category),
+      teamSide(site, homeCode, homeName, category),
       h("div", {},
         h("div", { class: `big num${state === "live" ? " live" : ""}` }, state === "upcoming" && base ? timeText(base.start) : score),
         h("div", { class: `status${state === "live" ? " live" : ""}` },
           state === "live" ? ["LIVE · ", status, clockText(id) && /'$/.test(clockText(id)) ? [" · ", h("span", { "data-clock": id }, clockText(id))] : null] : status),
         base?.scoreNote ? h("div", { class: "meta" }, base.scoreNote) : null),
-      teamSide(awayCode, awayName, category)),
+      teamSide(site, awayCode, awayName, category)),
     state !== "upcoming" && d ? scorersBlock(d.goals, d.home?.name ?? homeName, d.away?.name ?? awayName) : null,
     base ? h("div", { class: "meta" },
       [base.start.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }), base.venue].filter(Boolean).join(" · ")) : null);
 
   let body;
   if (tab === "stats") body = matchStatsTab(entry, homeCode, awayCode);
-  else if (d) body = { lineups: lineupsTab, goals: goalsTab, cards: cardsTab, h2h: h2hTab }[tab](d, state);
+  else if (d) body = { lineups: lineupsTab, goals: goalsTab, cards: cardsTab, h2h: h2hTab }[tab](d, state, site);
   else if (entry.detailError) body = section(null, message(null, `Couldn't load this match: ${entry.detailError}`));
   else body = section(null, spinnerRow());
 
@@ -854,8 +972,9 @@ function scorersBlock(goals, homeName, awayName) {
 async function shareMatch(id) {
   const base = S.matchIndex.get(id);
   const d = S.matchDetails.get(id)?.detail;
-  const home = base ? teamName(base.home) : displayTeam(d?.home?.name ?? "");
-  const away = base ? teamName(base.away) : displayTeam(d?.away?.name ?? "");
+  const site = siteOf(id);
+  const home = base ? teamName(base.home, site) : displayTeam(d?.home?.name ?? "", site);
+  const away = base ? teamName(base.away, site) : displayTeam(d?.away?.name ?? "", site);
   const state = P.matchState(d?.status ?? base?.status);
   const score = d?.scoreline ?? (base?.homeScore != null ? `${base.homeScore} - ${base.awayScore}` : null);
   const title = state === "upcoming" || !score ? `${home} v ${away}` : `${home} ${score.replace(" - ", "–")} ${away}`;
@@ -882,12 +1001,12 @@ function toast(text) {
 }
 
 /** Flag and team name; the name links to the team page. */
-function teamSide(code, name, category) {
-  if (!code) return h("div", { class: "side" }, flag(null, true), name);
-  return h("a", { class: "side team-link", href: teamHref(code, category) }, flag(code, true), h("span", {}, name, " ›"));
+function teamSide(site, code, name, category) {
+  if (!code) return h("div", { class: "side" }, flag(null, true, site), name);
+  return h("a", { class: "side team-link", href: teamHref(site, code, category) }, flag(code, true, site), h("span", {}, name, " ›"));
 }
 
-function lineupsTab(d) {
+function lineupsTab(d, state, site) {
   if (d.lineups.every((t) => !t.players.length)) return section(null, message(null, "Lineups haven't been published yet."));
   const playerRow = (p) => h("div", { class: "row" },
     h("span", { class: "shirt num" }, p.number),
@@ -896,28 +1015,28 @@ function lineupsTab(d) {
       ["G", "Y", "R"].includes(e.kind) ? h("span", { class: `card-chip card-${e.kind}`, title: "Card" }) : h("span", { class: "dot", title: "Goal" }),
       `${e.minute}'`))) : null);
   return d.lineups.flatMap((team) => [
-    section(`${displayTeam(team.team)} · Starting XI`, team.players.filter((p) => p.started).map(playerRow)),
-    team.players.some((p) => !p.started) ? section(`${displayTeam(team.team)} · Substitutes`, team.players.filter((p) => !p.started).map(playerRow)) : null,
-    team.staff.length ? section(`${displayTeam(team.team)} · Staff`, team.staff.map((s) => h("div", { class: "row" },
+    section(`${displayTeam(team.team, site)} · Starting XI`, team.players.filter((p) => p.started).map(playerRow)),
+    team.players.some((p) => !p.started) ? section(`${displayTeam(team.team, site)} · Substitutes`, team.players.filter((p) => !p.started).map(playerRow)) : null,
+    team.staff.length ? section(`${displayTeam(team.team, site)} · Staff`, team.staff.map((s) => h("div", { class: "row" },
       h("span", { style: "width:90px;color:var(--muted)" }, s.role.charAt(0) + s.role.slice(1).toLowerCase()), s.name))) : null,
   ]);
 }
 
-function goalsTab(d, state) {
+function goalsTab(d, state, site) {
   if (!d.goals.length) return section(null, message(null, state === "upcoming" ? "The match hasn't started yet." : "No goals."));
   return section(null, d.goals.map((g) => h("div", { class: "row" },
     h("span", { class: "minute num" }, `${g.minute}'`),
-    h("div", { class: "grow" }, h("div", {}, `#${g.shirt} ${g.player}`), h("div", { class: "caption" }, `${displayTeam(g.team)} · ${g.action}`)),
+    h("div", { class: "grow" }, h("div", {}, `#${g.shirt} ${g.player}`), h("div", { class: "caption" }, `${displayTeam(g.team, site)} · ${g.action}`)),
     h("strong", { class: "num" }, g.score))));
 }
 
-function cardsTab(d, state) {
+function cardsTab(d, state, site) {
   if (!d.cards.length) return section(null, message(null, state === "upcoming" ? "The match hasn't started yet." : "No cards."));
   return section(null, d.cards.map((c) => h("div", { class: "row" },
     h("span", { class: "minute num" }, `${c.minute}'`),
     h("span", { class: `card-chip card-${c.type.toUpperCase()}` }),
     h("div", { class: "grow" }, h("div", {}, `#${c.shirt} ${c.player}`),
-      h("div", { class: "caption" }, [displayTeam(c.team), c.umpire ? `Umpire: ${c.umpire}` : null].filter(Boolean).join(" · "))))),
+      h("div", { class: "caption" }, [displayTeam(c.team, site), c.umpire ? `Umpire: ${c.umpire}` : null].filter(Boolean).join(" · "))))),
     "Green = 2 min suspension, yellow = 5–10 min, red = sent off.");
 }
 
@@ -933,10 +1052,10 @@ function matchStatsTab(entry, homeCode, awayCode) {
   ]));
 }
 
-function h2hTab(d) {
+function h2hTab(d, state, site) {
   if (!d.headToHead.length) return section(null, message(null, "These teams haven't met before."));
   return d.headToHead.map((g) => section(g.category, g.matches.map((m) =>
-    h("a", { class: "row", href: link(`m/${m.id}`) },
+    h("a", { class: "row", href: link(`m/${cid(site, m.id)}`) },
       h("div", { class: "grow" },
         h("div", { style: "display:flex;justify-content:space-between;gap:8px" }, h("strong", {}, m.teams), h("strong", { class: "num" }, m.scoreline)),
         h("div", { class: "caption" }, `${m.competition} · ${m.date}`),
@@ -953,13 +1072,18 @@ function renderTournament(id, tab = "matches") {
   const info = S.tournaments.get(id);
   const name = info?.name ?? matches?.[0]?.competition ?? "Tournament";
   const sub = info ? [info.category, info.location].filter(Boolean).join(" · ") : null;
-  topbar.replaceChildren(subBar(name, sub));
+  const fav = S.favTournaments.has(id);
+  topbar.replaceChildren(subBar(name, sub, h("button", {
+    class: `icon-btn fav-toggle${fav ? " on" : ""}`, onclick: () => { toggleFavTournament(id); toast(fav ? "Removed from favourites" : "Added to favourites"); },
+    "aria-pressed": String(fav), "aria-label": fav ? "Remove tournament from favourites" : "Add tournament to favourites",
+  }, fav ? "★" : "☆")));
 
+  const site = siteOf(id);
   const entry = S.tournamentData.get(id) ?? {};
   let body;
   if (tab === "matches") body = tournamentMatches(id, matches);
-  else if (tab === "standings") body = standingsTab(entry);
-  else body = tournamentStatsTab(entry);
+  else if (tab === "standings") body = standingsTab(entry, site);
+  else body = tournamentStatsTab(entry, site);
   view.replaceChildren(...[segmented(TOURNAMENT_TABS, tab), body].flat(Infinity).filter(Boolean));
 }
 
@@ -978,7 +1102,7 @@ function tournamentMatches(id, matches) {
     section([dayTitle(k), k === P.today() ? h("span", { style: "color:var(--accent)" }, " · Today") : null], list.map((m) => matchRow(m))));
 }
 
-function standingsTab(entry) {
+function standingsTab(entry, site) {
   if (!entry.standings) {
     return entry.standingsError ? section(null, message(null, `Couldn't load standings: ${entry.standingsError}`)) : section(null, spinnerRow());
   }
@@ -993,19 +1117,19 @@ function standingsTab(entry) {
         h("thead", {}, h("tr", {}, h("th", { class: "left" }, "#"), h("th", { class: "left" }, "Team"), shown.map(([c]) => h("th", {}, c)))),
         h("tbody", {}, pool.rows.map((r) => h("tr", {},
           h("td", { class: "left strong" }, r.rank),
-          h("td", { class: "left player" }, h("span", { class: "who" }, flag(teamCodeFor(r.team)), h("span", {}, displayTeam(r.team)))),
+          h("td", { class: "left player" }, h("span", { class: "who" }, flag(teamCodeFor(r.team, site), false, site), h("span", {}, displayTeam(r.team, site)))),
           shown.map(([c, i]) => h("td", { class: c === "Pts" ? "strong" : "" }, cell(c, r.values[i])))))))),
       [...pool.notes, shown.filter(([c]) => keyText[c]).map(([c]) => keyText[c]).join(" · ")].join("\n"));
   });
 }
 
-function tournamentStatsTab(entry) {
+function tournamentStatsTab(entry, site) {
   if (!entry.stats) {
     return entry.statsError ? section(null, message(null, `Couldn't load statistics: ${entry.statsError}`)) : section(null, spinnerRow());
   }
   const { scorers, cards } = entry.stats;
   const playerCell = (r) => h("td", { class: "left player" },
-    h("span", { class: "who" }, flag(r.code), h("span", {}, r.player, h("small", {}, `#${r.shirt} · ${displayTeam(r.team)}`))));
+    h("span", { class: "who" }, flag(r.code, false, site), h("span", {}, r.player, h("small", {}, `#${r.shirt} · ${displayTeam(r.team, site)}`))));
   const table = (heads, rows, total, boldLast) => h("div", { class: "scroll-x" }, h("table", { class: "tbl num" },
     h("thead", {}, h("tr", {}, h("th", { class: "left" }, "Player"), heads.map((x) => h("th", {}, x)))),
     h("tbody", {}, rows.map((r) => h("tr", {}, playerCell(r), r.values.map((v, i) =>
@@ -1054,27 +1178,28 @@ document.addEventListener("visibilitychange", () => {
 
 // ---------- Team page
 
-function renderTeam(code, category) {
-  const name = teamName(code);
+function renderTeam(key, category) {
+  const [site, code] = splitTeam(key);
+  const name = teamName(code, site);
   topbar.replaceChildren(subBar(name, category ?? "All categories"));
 
   const team = S.team;
-  const isFav = S.favourites.has(code);
-  const parts = [h("div", { class: "team-head" }, flag(code, true),
+  const isFav = isFavTeam(site, code);
+  const parts = [h("div", { class: "team-head" }, flag(code, true, site),
     h("div", { class: "grow" }, h("strong", {}, name), h("div", { class: "caption" }, "Matches from the last 6 months and upcoming fixtures")),
     h("button", {
-      class: `pill fav-btn${isFav ? " on" : ""}`, onclick: () => toggleFavourite(code), "aria-pressed": String(isFav),
+      class: `pill fav-btn${isFav ? " on" : ""}`, onclick: () => toggleFavourite(site, code), "aria-pressed": String(isFav),
     }, isFav ? "★ Favourite" : "☆ Add to favourites"))];
 
   // Same category ↔ every team from this country.
-  const lastCategory = category ?? S.teamCategory.get(code) ?? null;
+  const lastCategory = category ?? S.teamCategory.get(key) ?? null;
   if (lastCategory) {
     parts.push(h("div", { class: "seg", role: "tablist" },
-      h("button", { role: "tab", "aria-selected": String(!!category), onclick: () => location.replace(teamHref(code, lastCategory)) }, lastCategory),
-      h("button", { role: "tab", "aria-selected": String(!category), onclick: () => location.replace(teamHref(code, null)) }, "All categories")));
+      h("button", { role: "tab", "aria-selected": String(!!category), onclick: () => location.replace(teamHref(site, code, lastCategory)) }, lastCategory),
+      h("button", { role: "tab", "aria-selected": String(!category), onclick: () => location.replace(teamHref(site, code, null)) }, "All categories")));
   }
 
-  if (!team || team.code !== code || team.category !== category) {
+  if (!team || team.key !== key || team.category !== category) {
     parts.push(section(null, spinnerRow()));
     view.replaceChildren(...parts);
     return;
@@ -1124,7 +1249,7 @@ function renderMenu() {
   if (!S.menuOpen) { drawer.replaceChildren(); return; }
 
   const t = P.today();
-  const all = [...S.tournaments.values()];
+  const all = [...S.tournaments.values()].filter((x) => isActive(x.site));
   const groups = [
     ["In progress", all.filter((x) => x.startKey <= t && t <= x.endKey).sort((a, b) => a.startKey.localeCompare(b.startKey))],
     ["Upcoming", all.filter((x) => x.startKey > t).sort((a, b) => a.startKey.localeCompare(b.startKey))],
@@ -1137,25 +1262,34 @@ function renderMenu() {
   const item = (x) => h("a", { class: "row", href: link(`t/${x.id}`) },
     h("div", { class: "grow" },
       h("div", { class: "menu-name" }, x.name),
-      h("div", { class: "caption" }, [range(x), x.category, x.location].filter(Boolean).join(" · "))),
+      h("div", { class: "caption" }, [x.startKey ? range(x) : null, x.category, x.location, siteTag(x.site)].filter(Boolean).join(" · "))),
     h("span", { class: "chev" }, icon("right", 16)));
+  const favTournaments = [...S.favTournaments.values()].map((f) => ({ ...f, ...S.tournaments.get(f.id) }))
+    .sort((a, b) => String(b.startKey).localeCompare(String(a.startKey)));
+  const favTeams = [...S.favourites].map((k) => { const [site, code] = splitTeam(k); return { site, code, name: teamName(code, site) }; })
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const title = VIEW === "all" ? "All tournaments" : VIEW === "intl" ? "International tournaments" : `${SITES[LEAGUE].label} tournaments`;
 
   drawer.replaceChildren(
     h("div", { class: "drawer-backdrop", onclick: closeMenu }),
     h("nav", { class: "drawer-panel", "aria-label": "Tournaments" },
       h("div", { class: "drawer-head" },
-        h("strong", {}, `${SRC.label} tournaments`),
+        h("strong", {}, title),
         h("button", { class: "icon-btn", onclick: closeMenu, "aria-label": "Close menu" }, icon("close"))),
       section(null, alertsRow()),
-      section("★ Favourite teams", S.favourites.size
-        ? [...S.favourites].sort((a, b) => teamName(a).localeCompare(teamName(b))).map((code) =>
-            h("a", { class: "row", href: teamHref(code, null) }, flag(code), h("span", { class: "grow" }, teamName(code)),
+      section("★ Favourite teams", favTeams.length
+        ? favTeams.map(({ site, code, name }) =>
+            h("a", { class: "row", href: teamHref(site, code, null) }, flag(code, false, site),
+              h("span", { class: "grow" }, name, siteTag(site) ? h("span", { class: "site-tag" }, siteTag(site)) : null),
               h("span", { class: "chev" }, icon("right", 16))))
         : message(null, "Open a team page and tap ☆ Add to favourites.")),
+      section("★ Favourite tournaments", favTournaments.length
+        ? favTournaments.map(item)
+        : message(null, "Open a tournament and tap ☆ to keep its matches at the top.")),
       groups.filter(([, list]) => list.length).map(([title, list]) => section(title, list.map(item))),
-      !all.length ? section(null, S.loadingCatalog ? spinnerRow() : message(null, S.catalogError ?? "No tournaments loaded yet.")) : null,
-      S.hasMore ? h("button", { class: "pill load-more", onclick: loadNextCatalogPage, disabled: S.loadingCatalog },
-        S.loadingCatalog ? "Loading…" : "Load older tournaments") : null));
+      !all.length ? section(null, anyCatalogLoading() ? spinnerRow() : message(null, catalogError() ?? "No tournaments loaded yet.")) : null,
+      anyMoreCatalog() ? h("button", { class: "pill load-more", onclick: loadNextCatalogPage, disabled: anyCatalogLoading() },
+        anyCatalogLoading() ? "Loading…" : "Load older tournaments") : null));
 }
 
 // Tick live minutes every second without redrawing the page.
@@ -1168,11 +1302,7 @@ setInterval(() => {
 
 // =================================================================== Start
 
-renderCredit();
-// India Domestic uses blue instead of green (see style.css), including the browser's bar colour.
-document.documentElement.dataset.source = SOURCE;
-document.querySelector('meta[name="theme-color"]')?.setAttribute("content", SOURCE === "hi" ? "#1d4f9e" : "#0e5a3a");
-document.title = SOURCE === "hi" ? "Hockey Live · India Domestic" : "Hockey Live";
+applyTheme();
 
 // Background script for goal alerts.
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
@@ -1181,7 +1311,6 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").cat
 const restored = restoreSnapshot();
 rebuildDays();
 onRoute();
-loadCatalogPage(1).then(async () => {
+startSites().then(async () => {
   if (restored) await Promise.all(covering(P.today()).map((t) => loadMatches(t.id, true)));
-  await ensureDay(S.selected);
 });

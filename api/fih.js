@@ -2,7 +2,7 @@ import { SITES, USER_AGENT } from "./_sites.js";
 
 // Fetches pages from the Altius competition sites for the web app.
 // Browsers can't read another site's pages directly, so the app asks this
-// function instead. Only the two known sites, and only the handful of page
+// function instead. Only the known sites, and only the handful of page
 // types the app uses, are allowed.
 
 const ALLOWED_PATHS = [

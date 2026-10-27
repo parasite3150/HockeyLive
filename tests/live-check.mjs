@@ -1,11 +1,13 @@
-// Daily check against the live FIH and Hockey India sites: if their pages change
-// so the app can no longer read them, this exits with an error (GitHub emails you).
+// Daily check against the live sites: if their pages change so the app can no longer
+// read them, this exits with an error (GitHub emails you). FIH and Hockey India must pass;
+// problems on the other sites (newer, quieter, possibly off-season) are only printed as warnings.
 // Run with: npm run check-live
 import { DOMParser } from "linkedom";
 import * as P from "../public/parse.js";
 import { SITES, USER_AGENT } from "../api/_sites.js";
 
-const problems = [];
+const REQUIRED = new Set(["fih", "hi"]);
+const problems = [], warnings = [];
 const get = async (url) => {
   const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
   if (!res.ok) throw new Error(`${url} answered ${res.status}`);
@@ -14,7 +16,7 @@ const get = async (url) => {
 const doc = (html) => new DOMParser().parseFromString(html, "text/html");
 
 for (const [key, site] of Object.entries(SITES)) {
-  const fail = (msg) => problems.push(`[${key}] ${msg}`);
+  const fail = (msg) => (REQUIRED.has(key) ? problems : warnings).push(`[${key}] ${msg}`);
   try {
     const { tournaments } = P.parseCatalog(doc(await get(`${site.base}/competitions?view=all&page=1`)));
     if (!tournaments.length) { fail("tournament list: no tournaments read"); continue; }
@@ -47,6 +49,7 @@ for (const [key, site] of Object.entries(SITES)) {
   }
 }
 
+if (warnings.length) console.warn("Warnings (not failing the check):\n" + warnings.join("\n"));
 if (problems.length) {
   console.error("The app may not be able to read these pages any more:\n" + problems.join("\n"));
   process.exit(1);

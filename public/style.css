@@ -270,3 +270,35 @@ body.no-scroll { overflow: hidden; }
 /* Goal alerts row in the menu */
 .alerts-row { align-items: center; }
 .alert-icon { color: var(--accent); display: grid; place-items: center; flex-shrink: 0; }
+
+/* All option: half green, half blue dot */
+.source-switch .src-all { --src: #0e6b44; --src-soft: #e2f1ea; }
+.source-switch .src-all .src-dot { background: linear-gradient(90deg, #0e6b44 50%, #1d5fbf 50%); }
+@media (prefers-color-scheme: dark) {
+  .source-switch .src-all { --src: #47c48b; --src-soft: #163327; }
+  .source-switch .src-all .src-dot { background: linear-gradient(90deg, #47c48b 50%, #6ea8ff 50%); }
+}
+
+/* Domestic: league chips under the switch (scroll sideways if they don't fit) */
+.league-chips {
+  display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
+  max-width: 560px; margin: 0 auto 6px; padding: 0 2px 2px; justify-content: safe center;
+}
+.league-chips::-webkit-scrollbar { display: none; }
+.league-chips .chip {
+  flex-shrink: 0; border: 1px solid var(--line); background: var(--card); color: var(--muted);
+  border-radius: 999px; padding: 4px 11px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;
+}
+.league-chips .chip[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.league-chips .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Which association a tournament or team comes from (All view and menu) */
+.site-tag {
+  display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 5px; vertical-align: 1px;
+  font-size: 10px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase;
+  color: var(--muted); background: var(--chip);
+}
+
+/* Favourite-tournament star in the title bar */
+.fav-toggle { font-size: 22px; line-height: 1; }
+.fav-toggle.on { color: #e0a100; }

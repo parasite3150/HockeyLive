@@ -34,18 +34,27 @@ Alternatively, run `xcodegen` with the included `project.yml`.
 The same app as a website (`public/`) for any phone or computer. On iPhone, open it in Safari and choose **Share → Add to Home Screen**.
 
 - `public/`: the web app (plain HTML, CSS and JavaScript, no build step).
-- `api/fih.js`: a small helper that fetches FIH pages for the app, because browsers can't read another site's pages directly. Only the page types the app needs are allowed, and responses are cached for 20 seconds.
+- `api/fih.js`: a small helper that fetches pages for the app, because browsers can't read another site's pages directly. Only the known sites (`api/_sites.js`) and the page types the app needs are allowed.
+
+The web version reads several Altius competition sites, which all share the page layout above:
+
+| View | Sites |
+|---|---|
+| International | FIH (fih.altiusrt.com) |
+| Domestic (choose a country) | India (hockeyindia), Australia (hockeyaustralia), New Zealand (hockeynz), Canada (fhc), South Africa (saha), Denmark (dhu) — all `.altiusrt.com` |
+
+The switch at the top offers **All** (every site, international tournaments first), **International** and **Domestic** (with a row of country chips). Tournaments can be starred (☆ on the tournament screen) to keep their matches at the top of the day list. Match and tournament IDs in app links carry their site (site position × 100,000,000 + the site's own ID; FIH IDs are unchanged).
 
 ### Deploy on Vercel (free)
 1. Sign in at vercel.com with GitHub, then **Add New → Project** and import this repository.
 2. Keep the defaults (Framework: Other) and click **Deploy**.
 3. Every push to `main` redeploys automatically.
 
-Every screen shows a credit saying the data comes from the FIH / Altius competition website (fih.altiusrt.com), and that this is an unofficial fan app.
+Every screen shows a credit naming the association(s) and Altius site(s) the data on screen comes from, and that this is an unofficial fan app.
 
 ## Tests
 - `npm test` checks the page readers against saved copies of real FIH and Hockey India pages (`tests/fixtures/`).
-- `npm run check-live` reads the live sites and fails if they can no longer be read.
+- `npm run check-live` reads the live sites and fails if FIH or Hockey India can no longer be read (other sites only print warnings).
 - GitHub runs both: the saved-page tests on every push, and the live-site check daily (GitHub emails you if it fails).
 
 ## Goal alerts

@@ -1,6 +1,6 @@
 // Goal alerts for favourite teams (web push).
 //   GET  /api/push?action=key          the public key phones subscribe with
-//   POST /api/push?action=subscribe    { subscription, favourites: { fih: [...], hi: [...] } }
+//   POST /api/push?action=subscribe    { subscription, favourites: { fih: [...], hi: [...], ... } }
 //   POST /api/push?action=unsubscribe  { endpoint }
 //   GET  /api/push?action=check        look for kick-offs, goals and full times; send alerts
 //                                      (called once a minute by an external timer, e.g. cron-job.org)
@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 import webpush from "web-push";
 import { DOMParser } from "linkedom";
 import * as P from "../public/parse.js";
-import { SITES, USER_AGENT } from "./_sites.js";
+import { SITES, USER_AGENT, appId } from "./_sites.js";
 import { redis, getJSON, setJSON, storeReady } from "./_store.js";
 
 const MAX_SUBSCRIPTIONS = 5000;
@@ -57,7 +57,7 @@ async function subscribe(body) {
   if (!known && (await redis("SCARD", "push:subs")) >= MAX_SUBSCRIPTIONS) throw new Error("Too many subscriptions.");
   await setJSON(`push:sub:${id}`, {
     subscription: { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } },
-    favourites: { fih: cleanCodes(body.favourites?.fih), hi: cleanCodes(body.favourites?.hi) },
+    favourites: Object.fromEntries(Object.keys(SITES).map((k) => [k, cleanCodes(body.favourites?.[k])]).filter(([, list]) => list.length)),
   });
   await redis("SADD", "push:subs", id);
   return { ok: true };
@@ -91,39 +91,42 @@ async function check() {
   for (const [key, site] of Object.entries(SITES)) {
     const wanted = new Set(subs.flatMap((s) => s.favourites?.[key] ?? []));
     if (!wanted.size) continue;
-
-    const { tournaments } = P.parseCatalog(doc(await get(`${site.base}/competitions?view=all&page=1`)));
-    const today = new Date().toISOString().slice(0, 10);
-    const running = tournaments.filter((t) => t.startKey <= addDays(today, 1) && t.endKey >= addDays(today, -1));
-
-    for (const t of running) {
-      const matches = P.parseMatchListing(doc(await get(`${site.base}/competitions/${t.id}/matches`)), t.id);
-      const now = Date.now();
-      for (const m of matches) {
-        if (!wanted.has(m.home) && !wanted.has(m.away)) continue;
-        if (m.start.getTime() > now + 3600e3 || m.start.getTime() < now - 6 * 3600e3) continue;   // only around kick-off
-
-        const stateKey = `push:match:${key}:${m.id}`;
-        const before = await getJSON(stateKey);
-        const now_ = { state: P.matchState(m.status), h: m.homeScore ?? 0, a: m.awayScore ?? 0 };
-        await setJSON(stateKey, now_, 2 * 86400);
-        if (!before) continue;   // first time we see it: just remember it
-
-        const alerts = await describeChanges(key, site, t, m, before, now_);
-        if (!alerts.length) continue;
-        const targets = subs.filter((s) => (s.favourites?.[key] ?? []).some((c) => c === m.home || c === m.away));
-        for (const alert of alerts) sent.push(...(await sendAll(targets, alert)));
-      }
-    }
+    try { await checkSite(key, site, subs, wanted, sent); } catch { /* one site being down shouldn't stop the others */ }
   }
   return { ok: true, subscribers: subs.length, sent: sent.length };
+}
+
+async function checkSite(key, site, subs, wanted, sent) {
+  const { tournaments } = P.parseCatalog(doc(await get(`${site.base}/competitions?view=all&page=1`)));
+  const today = new Date().toISOString().slice(0, 10);
+  const running = tournaments.filter((t) => t.startKey <= addDays(today, 1) && t.endKey >= addDays(today, -1));
+
+  for (const t of running) {
+    const matches = P.parseMatchListing(doc(await get(`${site.base}/competitions/${t.id}/matches`)), t.id);
+    const now = Date.now();
+    for (const m of matches) {
+      if (!wanted.has(m.home) && !wanted.has(m.away)) continue;
+      if (m.start.getTime() > now + 3600e3 || m.start.getTime() < now - 6 * 3600e3) continue;   // only around kick-off
+
+      const stateKey = `push:match:${key}:${m.id}`;
+      const before = await getJSON(stateKey);
+      const now_ = { state: P.matchState(m.status), h: m.homeScore ?? 0, a: m.awayScore ?? 0 };
+      await setJSON(stateKey, now_, 2 * 86400);
+      if (!before) continue;   // first time we see it: just remember it
+
+      const alerts = await describeChanges(key, site, t, m, before, now_);
+      if (!alerts.length) continue;
+      const targets = subs.filter((s) => (s.favourites?.[key] ?? []).some((c) => c === m.home || c === m.away));
+      for (const alert of alerts) sent.push(...(await sendAll(targets, alert)));
+    }
+  }
 }
 
 async function describeChanges(key, site, t, m, before, after) {
   const names = await teamNames(key, site, t.id);
   const home = names.get(m.home) ?? m.home, away = names.get(m.away) ?? m.away;
   const score = `${home} ${after.h}–${after.a} ${away}`;
-  const url = `${SITE_URL}/#/${key === "hi" ? "hi/" : ""}m/${m.id}`;
+  const url = `${SITE_URL}/#/m/${appId(key, m.id)}`;
   const base = { url, tag: `match-${key}-${m.id}` };
   const alerts = [];
 
@@ -146,14 +149,15 @@ async function describeChanges(key, site, t, m, before, after) {
   return alerts;
 }
 
-/** Team names for alerts: country names (FIH) or the tournament's team list (Hockey India). */
+/** Team names for alerts: country names (FIH) or the tournament's team list (other sites). */
 async function teamNames(key, site, tournamentId) {
-  if (key !== "hi") return { get: (code) => P.countryName(code) };
-  const cached = await getJSON(`push:names:${tournamentId}`);
+  if (key === "fih") return { get: (code) => P.countryName(code) };
+  const cacheKey = key === "hi" ? `push:names:${tournamentId}` : `push:names:${key}:${tournamentId}`;
+  const cached = await getJSON(cacheKey);
   if (cached) return new Map(cached);
   const names = new Map([...P.parseTeamCodes(doc(await get(`${site.base}/competitions/${tournamentId}`)))]
     .map(([code, name]) => [code, P.niceTeamName(name)]));
-  await setJSON(`push:names:${tournamentId}`, [...names], 7 * 86400);
+  await setJSON(cacheKey, [...names], 7 * 86400);
   return names;
 }
 
