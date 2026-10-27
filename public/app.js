@@ -565,8 +565,11 @@ function shortName(name) {
   const isSurname = (w) => w.length > 1 && w === w.toUpperCase() && /[A-Z]/.test(w);
   const surname = words.filter(isSurname);
   if (!surname.length) return name;
-  const given = words.find((w) => !isSurname(w));
-  const last = surname.map((w) => w.charAt(0) + w.slice(1).toLowerCase()).join(" ");
+  const first = words.findIndex(isSurname), lastIdx = words.length - 1 - [...words].reverse().findIndex(isSurname);
+  // Given name comes after the surname on the FIH site; lowercase words before it are particles ("van der").
+  const given = words.slice(lastIdx + 1).find((w) => !isSurname(w)) ?? words.slice(0, first).find((w) => w !== w.toLowerCase());
+  const particles = words.slice(0, first).filter((w) => w === w.toLowerCase());
+  const last = [...particles, ...surname.map((w) => w.charAt(0) + w.slice(1).toLowerCase())].join(" ");
   return given ? `${given.charAt(0).toUpperCase()}. ${last}` : last;
 }
 
