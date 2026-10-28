@@ -98,12 +98,12 @@ const rawId = (id) => id % ID_SPAN;
 function readPref(key, fallback) { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } }
 function writePref(key, value) { try { localStorage.setItem(key, value); } catch { /* not saved */ } }
 let VIEW = readPref("hockeylive.view", readPref("hockeylive.source", "fih") === "hi" ? "dom" : "all");
-let LEAGUE = readPref("hockeylive.league", "hi");
+let LEAGUE = readPref("hockeylive.league", "all");   // "all" = every domestic league
 if (!["all", "intl", "dom"].includes(VIEW)) VIEW = "all";
-if (!SITES[LEAGUE] || SITES[LEAGUE].group !== "dom") LEAGUE = "hi";
+if (LEAGUE !== "all" && SITES[LEAGUE]?.group !== "dom") LEAGUE = "all";
 
 /** Sites shown in the current view. */
-const activeSites = () => (VIEW === "all" ? siteList() : VIEW === "intl" ? intlSites() : [LEAGUE]);
+const activeSites = () => (VIEW === "all" ? siteList() : VIEW === "intl" ? intlSites() : LEAGUE === "all" ? domSites() : [LEAGUE]);
 const isActive = (site) => activeSites().includes(site);
 
 /** In-app link: link("m/123") → "#/m/123". */
@@ -123,7 +123,7 @@ function setView(view, league = LEAGUE) {
 function applyTheme(blue = VIEW === "dom") {
   document.documentElement.dataset.source = blue ? "hi" : "fih";
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", blue ? "#1d4f9e" : "#0e5a3a");
-  document.title = VIEW === "dom" ? `Hockey Live · ${SITES[LEAGUE].label}` : "Hockey Live";
+  document.title = VIEW === "dom" ? `Hockey Live · ${LEAGUE === "all" ? "Domestic" : SITES[LEAGUE].label}` : "Hockey Live";
 }
 
 /** "India Domestic", "Euro Hockey"; nothing for FIH. */
@@ -803,13 +803,13 @@ function renderHome() {
   topbar.replaceChildren(
     h("div", { class: "source-switch seg", role: "tablist", "aria-label": "Competitions" },
       views.map(([v, label, cls]) => h("button", {
-        class: cls, role: "tab", "aria-selected": String(v === VIEW), onclick: () => v !== VIEW && setView(v),
+        class: cls, role: "tab", "aria-selected": String(v === VIEW), onclick: () => (v === "dom" ? setView("dom", "all") : v !== VIEW && setView(v)),   // Domestic always opens on All Domestic
       }, h("span", { class: "src-dot", "aria-hidden": "true" }), label))),
-    // Domestic: choose the country's league.
+    // Domestic: all leagues, or one country's.
     VIEW === "dom" ? h("div", { class: "league-chips", role: "tablist", "aria-label": "Domestic league" },
-      domSites().map((k) => h("button", {
+      ["all", ...domSites()].map((k) => h("button", {
         class: "chip", role: "tab", "aria-selected": String(k === LEAGUE), onclick: () => k !== LEAGUE && setView("dom", k),
-      }, SITES[k].short))) : "",
+      }, k === "all" ? "All Domestic" : SITES[k].short))) : "",
     h("div", { class: "bar" },
       menuButton(),
       h("button", { class: "icon-btn", onclick: () => move(-1), disabled: i <= 0, "aria-label": "Previous day" }, icon("left")),
@@ -843,7 +843,7 @@ function renderHome() {
     .sort((a, b) => (b.favT - a.favT) || (b.fav - a.fav) || (b.intl - a.intl) || (a.site - b.site) || (a.i - b.i))
     .map((x) => x.sec);
   for (const sec of tournamentSections) {
-    const tag = VIEW === "dom" ? null : siteTag(siteOf(sec.id));
+    const tag = VIEW === "dom" && LEAGUE !== "all" ? null : siteTag(siteOf(sec.id));
     parts.push(section(
       h("a", { href: link(`t/${sec.id}`) },
         S.favTournaments.has(sec.id) ? h("span", { class: "fav-star", "aria-label": "Favourite tournament" }, "★ ") : null,
@@ -1275,7 +1275,7 @@ function renderMenu() {
     .sort((a, b) => String(b.startKey).localeCompare(String(a.startKey)));
   const favTeams = [...S.favourites].map((k) => { const [site, code] = splitTeam(k); return { site, code, name: teamName(code, site) }; })
     .sort((a, b) => a.name.localeCompare(b.name));
-  const title = VIEW === "all" ? "All tournaments" : VIEW === "intl" ? "International tournaments" : `${SITES[LEAGUE].label} tournaments`;
+  const title = VIEW === "all" ? "All tournaments" : VIEW === "intl" ? "International tournaments" : LEAGUE === "all" ? "Domestic tournaments" : `${SITES[LEAGUE].label} tournaments`;
 
   drawer.replaceChildren(
     h("div", { class: "drawer-backdrop", onclick: closeMenu }),
