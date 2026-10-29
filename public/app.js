@@ -97,9 +97,10 @@ const rawId = (id) => id % ID_SPAN;
 // The view chosen with the switch: All, International, or one Domestic league.
 function readPref(key, fallback) { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } }
 function writePref(key, value) { try { localStorage.setItem(key, value); } catch { /* not saved */ } }
-let VIEW = readPref("hockeylive.view", readPref("hockeylive.source", "fih") === "hi" ? "dom" : "all");
+// Every visit opens on International; if nothing international is live, it moves to All (see Start).
+let VIEW = "intl";
+let viewChosen = false;   // set once the viewer picks a view, so the start-up move never overrides them
 let LEAGUE = readPref("hockeylive.league", "all");   // "all" = every domestic league
-if (!["all", "intl", "dom"].includes(VIEW)) VIEW = "all";
 if (LEAGUE !== "all" && SITES[LEAGUE]?.group !== "dom") LEAGUE = "all";
 
 /** Sites shown in the current view. */
@@ -111,7 +112,7 @@ const link = (path = "") => `#/${path}`;
 
 function setView(view, league = LEAGUE) {
   VIEW = view; LEAGUE = league;
-  writePref("hockeylive.view", view); writePref("hockeylive.league", league);
+  writePref("hockeylive.league", league);
   applyTheme();
   rebuildDays();
   if (!S.days.includes(S.selected)) S.selected = P.today();
@@ -803,12 +804,12 @@ function renderHome() {
   topbar.replaceChildren(
     h("div", { class: "source-switch seg", role: "tablist", "aria-label": "Competitions" },
       views.map(([v, label, cls]) => h("button", {
-        class: cls, role: "tab", "aria-selected": String(v === VIEW), onclick: () => (v === "dom" ? setView("dom", "all") : v !== VIEW && setView(v)),   // Domestic always opens on All Domestic
+        class: cls, role: "tab", "aria-selected": String(v === VIEW), onclick: () => { viewChosen = true; if (v === "dom") setView("dom", "all"); else if (v !== VIEW) setView(v); },   // Domestic always opens on All Domestic
       }, h("span", { class: "src-dot", "aria-hidden": "true" }), label))),
     // Domestic: all leagues, or one country's.
     VIEW === "dom" ? h("div", { class: "league-chips", role: "tablist", "aria-label": "Domestic league" },
       ["all", ...domSites()].map((k) => h("button", {
-        class: "chip", role: "tab", "aria-selected": String(k === LEAGUE), onclick: () => k !== LEAGUE && setView("dom", k),
+        class: "chip", role: "tab", "aria-selected": String(k === LEAGUE), onclick: () => { viewChosen = true; if (k !== LEAGUE) setView("dom", k); },
       }, k === "all" ? "All Domestic" : SITES[k].short))) : "",
     h("div", { class: "bar" },
       menuButton(),
@@ -1320,4 +1321,7 @@ rebuildDays();
 onRoute();
 startSites().then(async () => {
   if (restored) await Promise.all(covering(P.today()).map((t) => loadMatches(t.id, true)));
+  // No international match live right now: show All instead.
+  const liveIntl = sectionsFor(P.today()).some((sec) => sec.matches.some((m) => P.matchState(m.status) === "live"));
+  if (!viewChosen && VIEW === "intl" && !liveIntl) setView("all");
 });
